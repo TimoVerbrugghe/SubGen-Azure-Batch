@@ -114,10 +114,12 @@ def main():
     """Run the application with uvicorn."""
     settings = get_settings()
     
+    # Port is fixed at 9000 for Docker deployments
+    # Change the port in docker-compose.yml or docker run command if needed
     uvicorn.run(
         "app.main:app",
         host="0.0.0.0",
-        port=settings.webhook_port,
+        port=9000,
         reload=settings.debug,
         log_level="debug" if settings.debug else "info",
     )

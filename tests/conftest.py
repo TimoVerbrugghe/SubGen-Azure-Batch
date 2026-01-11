@@ -40,8 +40,10 @@ def pytest_configure(config):
 # Load test environment variables
 @pytest.fixture(scope="session", autouse=True)
 def load_test_env():
-    """Load test environment variables from tests/.env"""
-    env_path = Path(__file__).parent / ".env"
+    """Load environment variables from .env in repository root."""
+    # Look for .env in the repository root (parent of tests/)
+    repo_root = Path(__file__).parent.parent
+    env_path = repo_root / ".env"
     if env_path.exists():
         load_dotenv(env_path, override=True)
     # Don't skip if .env doesn't exist - allow running unit tests without it

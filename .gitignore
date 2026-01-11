@@ -8,6 +8,7 @@
 
 # Test environment variables (contains secrets)
 tests/.env
+tests/docker-compose.yml
 
 # Python
 __pycache__/

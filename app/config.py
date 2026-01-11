@@ -100,8 +100,8 @@ class EmbyConfig:
 class PathMappingConfig:
     """Path mapping configuration for Docker volume differences."""
     enabled: bool = False
-    from_path: str = "/tv"
-    to_path: str = "/Volumes/TV"
+    from_path: str = ""
+    to_path: str = ""
     
     def apply(self, path: str) -> str:
         """Apply path mapping if enabled."""
@@ -113,8 +113,8 @@ class PathMappingConfig:
 @dataclass 
 class ProcessingConfig:
     """Processing control configuration."""
-    process_added_media: bool = True  # Process on library.new events
-    process_on_play: bool = True  # Process on media.play events
+    process_added_media: bool = False  # Process on library.new events
+    process_on_play: bool = False  # Process on media.play events
 
 
 @dataclass
@@ -137,7 +137,7 @@ class TranscriptionConfig:
     
     # Preferred audio languages for audio track selection (pipe-separated, e.g., "eng|deu")
     # Based on original subgen.py PREFERRED_AUDIO_LANGUAGES setting.
-    preferred_audio_languages: str = "eng"
+    preferred_audio_languages: str = ""
     
     # Limit transcription to files with audio tracks in preferred languages
     # Based on original subgen.py LIMIT_TO_PREFERRED_AUDIO_LANGUAGE setting.
@@ -267,7 +267,6 @@ class Settings:
     """Application settings."""
     
     # Server settings
-    webhook_port: int = 9000
     debug: bool = False
     
     # UI settings
@@ -275,7 +274,7 @@ class Settings:
     
     # Media settings
     media_folders: List[str] = field(default_factory=list)
-    subtitle_language: str = "en"
+    subtitle_language: str = ""
     
     # Processing settings
     concurrent_transcriptions: int = 50
@@ -311,7 +310,6 @@ class Settings:
         """Load settings from environment variables."""
         return cls(
             # Server settings
-            webhook_port=int(os.getenv('WEBHOOK_PORT', '9000')),
             debug=get_bool(os.getenv('DEBUG', 'false')),
             
             # UI settings
@@ -319,7 +317,7 @@ class Settings:
             
             # Media settings
             media_folders=get_list(os.getenv('MEDIA_FOLDERS', '/tv,/movies')),
-            subtitle_language=os.getenv('SUBTITLE_LANGUAGE', 'en'),
+            subtitle_language=os.getenv('SUBTITLE_LANGUAGE', ''),
             
             # Processing settings
             concurrent_transcriptions=int(os.getenv('CONCURRENT_TRANSCRIPTIONS', '50')),
@@ -337,14 +335,14 @@ class Settings:
             # Path mapping configuration
             path_mapping=PathMappingConfig(
                 enabled=get_bool(os.getenv('USE_PATH_MAPPING', 'false')),
-                from_path=os.getenv('PATH_MAPPING_FROM', '/tv'),
-                to_path=os.getenv('PATH_MAPPING_TO', '/Volumes/TV'),
+                from_path=os.getenv('PATH_MAPPING_FROM', ''),
+                to_path=os.getenv('PATH_MAPPING_TO', ''),
             ),
             
             # Processing control
             processing=ProcessingConfig(
-                process_added_media=get_bool(os.getenv('PROCESS_ADDED_MEDIA', 'true')),
-                process_on_play=get_bool(os.getenv('PROCESS_MEDIA_ON_PLAY', 'true')),
+                process_added_media=get_bool(os.getenv('PROCESS_ADDED_MEDIA', 'false')),
+                process_on_play=get_bool(os.getenv('PROCESS_MEDIA_ON_PLAY', 'false')),
             ),
             
             # Skip configuration
@@ -371,7 +369,7 @@ class Settings:
                 force_language=os.getenv('FORCE_DETECTED_LANGUAGE_TO', ''),
                 append_credit_line=get_bool(os.getenv('APPEND', 'false')),
                 lrc_for_audio_files=get_bool(os.getenv('LRC_FOR_AUDIO_FILES', 'true')),
-                preferred_audio_languages=os.getenv('PREFERRED_AUDIO_LANGUAGES', 'eng'),
+                preferred_audio_languages=os.getenv('PREFERRED_AUDIO_LANGUAGES', ''),
                 limit_to_preferred_audio_languages=get_bool(os.getenv('LIMIT_TO_PREFERRED_AUDIO_LANGUAGE', 'false')),
                 detect_language_length=int(os.getenv('DETECT_LANGUAGE_LENGTH', '30')),
                 detect_language_offset=int(os.getenv('DETECT_LANGUAGE_OFFSET', '0')),

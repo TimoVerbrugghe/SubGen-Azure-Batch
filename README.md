@@ -160,20 +160,19 @@ The following environment variables are available in Docker. They will default t
 | AZURE_STORAGE_CONNECTION_STRING | '' | **(New)** Azure Blob Storage connection string |
 | AZURE_STORAGE_CONTAINER | 'transcription-audio' | **(New)** Container name for temporary audio uploads |
 | **Server Settings** |||
-| WEBHOOK_PORT | 9000 | Change this if you need a different port for your webhook |
 | DEBUG | False | Provides debug data that can be helpful to troubleshoot issues |
 | **Media Settings** |||
 | MEDIA_FOLDERS | '/tv,/movies' | **(New)** Comma-separated list of paths to show in the Web UI file browser |
-| SUBTITLE_LANGUAGE | 'en' | Default subtitle language code |
+| SUBTITLE_LANGUAGE | '' | Default subtitle language code (leave empty for auto-detect) |
 | **Processing Settings** |||
 | CONCURRENT_TRANSCRIPTIONS | 50 | **(Changed)** Number of jobs to process in parallel. Default increased for cloud processing |
 | JOB_POLL_INTERVAL | 10 | **(New)** Seconds between polling Azure for job status |
-| PROCESS_ADDED_MEDIA | True | Will generate subtitles for all media added regardless of existing subtitles |
-| PROCESS_MEDIA_ON_PLAY | True | Will generate subtitles for all played media regardless of existing subtitles |
+| PROCESS_ADDED_MEDIA | False | Process media when added to library (requires webhook integration) |
+| PROCESS_MEDIA_ON_PLAY | False | Process media when played (requires webhook integration) |
 | **Path Mapping** |||
 | USE_PATH_MAPPING | False | Enable path translation between media server and container paths |
-| PATH_MAPPING_FROM | '/tv' | This is the path of media relative to your media server |
-| PATH_MAPPING_TO | '/Volumes/TV' | This is the path of that same folder relative to SubGen-Azure-Batch |
+| PATH_MAPPING_FROM | '' | This is the path of media relative to your media server |
+| PATH_MAPPING_TO | '' | This is the path of that same folder relative to SubGen-Azure-Batch |
 | **Skip Conditions** |||
 | SKIP_IF_TARGET_SUBTITLES_EXIST | True | Skip generation if a subtitle matching the target language already exists |
 | SKIP_IF_EXTERNAL_SUBTITLES_EXIST | False | Skip generation if any external subtitle file exists |
@@ -187,7 +186,7 @@ The following environment variables are available in Docker. They will default t
 | FORCE_DETECTED_LANGUAGE_TO | '' | Force all transcriptions to use this language code (e.g., 'en', 'es') |
 | APPEND | False | Append "Transcribed by SubGen-Azure-Batch" credit line at end of subtitles |
 | LRC_FOR_AUDIO_FILES | True | Write .lrc files instead of .srt for audio files (.mp3, .flac, etc.) |
-| PREFERRED_AUDIO_LANGUAGES | 'eng' | Preferred audio track languages for extraction (pipe-separated) |
+| PREFERRED_AUDIO_LANGUAGES | '' | Preferred audio track languages for extraction (pipe-separated, e.g., 'eng\|deu') |
 | LIMIT_TO_PREFERRED_AUDIO_LANGUAGE | False | Skip files without audio in preferred languages |
 | DETECT_LANGUAGE_LENGTH | 30 | Detect language on the first X seconds of audio |
 | DETECT_LANGUAGE_OFFSET | 0 | Start language detection X seconds into the file (skip intros) |

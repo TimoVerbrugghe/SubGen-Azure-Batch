@@ -41,9 +41,7 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 # Environment defaults
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    SUBGEN_AZURE_BATCH_VERSION=1.0.0 \
-    SUBGEN_AZURE_BATCH_PORT=9000 \
-    SUBGEN_AZURE_BATCH_HOST=0.0.0.0
+    SUBGEN_AZURE_BATCH_VERSION=1.0.0
 
-# Run with Uvicorn
-CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "9000"]
+# Start application
+CMD ["python", "-m", "app.main"]
