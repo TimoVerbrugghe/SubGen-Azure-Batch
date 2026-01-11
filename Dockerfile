@@ -1,45 +1,49 @@
-# Stage 1: Builder
-FROM nvidia/cuda:12.3.2-cudnn9-runtime-ubuntu22.04 AS builder
+# SubGen-Azure-Batch Dockerfile
+# Lightweight image using Azure Batch Transcription API (no CUDA/GPU required)
+# https://github.com/TimoVerbrugghe/subgen-azure-batch
 
-WORKDIR /subgen
+FROM python:3.11-slim
 
-ARG DEBIAN_FRONTEND=noninteractive
+LABEL maintainer="SubGen-Azure-Batch"
+LABEL description="Cloud-based subtitle generator using Azure Batch Transcription API"
+LABEL version="1.0.0"
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3 \
-    python3-pip \
-    ffmpeg \
-    git \
-    tzdata \
-    && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
 
-# Copy requirements and install Python dependencies
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Copy application code
-COPY . .
-
-# Stage 2: Runtime
-FROM nvidia/cuda:12.3.2-cudnn9-runtime-ubuntu22.04
-
-WORKDIR /subgen
-
-# Copy necessary files from the builder stage
-COPY --from=builder /subgen/launcher.py .
-COPY --from=builder /subgen/subgen.py .
-COPY --from=builder /subgen/language_code.py .
-COPY --from=builder /usr/local/lib/python3.10/dist-packages /usr/local/lib/python3.10/dist-packages
-
-# Install runtime dependencies
+# Install system dependencies (FFmpeg for audio extraction)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
-    python3 \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-ENV PYTHONUNBUFFERED=1
+# Copy requirements first for better caching
+COPY requirements.txt .
 
-# Set command to run the application
-CMD ["python3", "launcher.py"]
+# Install Python dependencies
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy application code
+COPY app/ ./app/
+
+# Create non-root user for security
+RUN useradd --create-home --shell /bin/bash subgen \
+    && chown -R subgen:subgen /app
+
+USER subgen
+
+# Default port
+EXPOSE 9000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:9000/health || exit 1
+
+# Environment defaults
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    SUBGEN_AZURE_BATCH_VERSION=1.0.0 \
+    SUBGEN_AZURE_BATCH_PORT=9000 \
+    SUBGEN_AZURE_BATCH_HOST=0.0.0.0
+
+# Run with Uvicorn
+CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "9000"]

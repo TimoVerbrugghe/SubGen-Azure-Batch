@@ -1,40 +1,106 @@
-#docker-compose.yml
-version: '2'
+# SubGen-Azure-Batch Docker Compose
+# Cloud-based subtitle generator using Azure Batch Transcription API
+# https://github.com/TimoVerbrugghe/subgen-azure-batch
+
 services:
-  subgen:
-    container_name: subgen
-    tty: true
-    image: mccloud/subgen
-    environment:
-       - "WHISPER_MODEL=medium"
-       - "WHISPER_THREADS=4"
-       - "PROCADDEDMEDIA=True"
-       - "PROCMEDIAONPLAY=False"
-       - "NAMESUBLANG=aa"
-       - "SKIPIFINTERNALSUBLANG=eng"
-       - "PLEXTOKEN=plextoken"
-       - "PLEXSERVER=http://plexserver:32400"
-       - "JELLYFINTOKEN=token here"
-       - "JELLYFINSERVER=http://jellyfin:8096"
-       - "WEBHOOKPORT=9000"
-       - "CONCURRENT_TRANSCRIPTIONS=2"
-       - "WORD_LEVEL_HIGHLIGHT=False"
-       - "DEBUG=True"
-       - "USE_PATH_MAPPING=False"
-       - "PATH_MAPPING_FROM=/tv"
-       - "PATH_MAPPING_TO=/Volumes/TV"
-       - "TRANSCRIBE_DEVICE=cpu"
-       - "CLEAR_VRAM_ON_COMPLETE=True"
-       - "MODEL_PATH=./models"
-       - "UPDATE=False"
-       - "APPEND=False"
-       - "USE_MODEL_PROMPT=False"
-       - "CUSTOM_MODEL_PROMPT="
-       - "LRC_FOR_AUDIO_FILES=True"
-       - "CUSTOM_REGROUP=cm_sl=84_sl=42++++++1"
-    volumes:
-       - "${TV}:/tv"
-       - "${MOVIES}:/movies"
-       - "${APPDATA}/subgen/models:/subgen/models"
+  subgen-azure-batch:
+    container_name: subgen-azure-batch
+    build:
+      context: .
+      dockerfile: Dockerfile
+    # Or use pre-built image:
+    # image: mccloud/subgen-azure-batch:latest
+    restart: unless-stopped
     ports:
-       - "9000:9000"
+      - "9000:9000"
+    environment:
+      # ===== AZURE SPEECH SERVICES (REQUIRED) =====
+      - AZURE_SPEECH_KEY=${AZURE_SPEECH_KEY}
+      - AZURE_SPEECH_REGION=${AZURE_SPEECH_REGION}
+      
+      # ===== AZURE BLOB STORAGE (REQUIRED) =====
+      - AZURE_STORAGE_CONNECTION_STRING=${AZURE_STORAGE_CONNECTION_STRING}
+      - AZURE_STORAGE_CONTAINER=${AZURE_STORAGE_CONTAINER:-subgen-audio}
+      
+      # ===== GENERAL SETTINGS =====
+      - SUBGEN_AZURE_BATCH_PORT=9000
+      - SUBGEN_AZURE_BATCH_DEBUG=${SUBGEN_AZURE_BATCH_DEBUG:-false}
+      - SUBGEN_AZURE_BATCH_LOG_LEVEL=${SUBGEN_AZURE_BATCH_LOG_LEVEL:-INFO}
+      
+      # ===== TRANSCRIPTION SETTINGS =====
+      - DEFAULT_LANGUAGE=${DEFAULT_LANGUAGE:-en}
+      - CONCURRENT_TRANSCRIPTIONS=${CONCURRENT_TRANSCRIPTIONS:-50}
+      - TRANSCRIPTION_TIMEOUT=${TRANSCRIPTION_TIMEOUT:-3600}
+      
+      # ===== SUBTITLE SETTINGS =====
+      - SUBTITLE_LANGUAGE_NAMING=${SUBTITLE_LANGUAGE_NAMING:-iso_639_1}
+      - APPEND_SUFFIX=${APPEND_SUFFIX:-true}
+      
+      # ===== BAZARR INTEGRATION =====
+      - BAZARR_URL=${BAZARR_URL:-}
+      - BAZARR_API_KEY=${BAZARR_API_KEY:-}
+      
+      # ===== PLEX INTEGRATION (Optional) =====
+      - PLEX_SERVER=${PLEX_SERVER:-}
+      - PLEX_TOKEN=${PLEX_TOKEN:-}
+      - PLEX_PROC_ADDED_MEDIA=${PLEX_PROC_ADDED_MEDIA:-true}
+      - PLEX_PROC_MEDIA_ON_PLAY=${PLEX_PROC_MEDIA_ON_PLAY:-false}
+      
+      # ===== JELLYFIN INTEGRATION (Optional) =====
+      - JELLYFIN_SERVER=${JELLYFIN_SERVER:-}
+      - JELLYFIN_TOKEN=${JELLYFIN_TOKEN:-}
+      - JELLYFIN_PROC_ADDED_MEDIA=${JELLYFIN_PROC_ADDED_MEDIA:-true}
+      - JELLYFIN_PROC_MEDIA_ON_PLAY=${JELLYFIN_PROC_MEDIA_ON_PLAY:-false}
+      
+      # ===== EMBY INTEGRATION (Optional) =====
+      - EMBY_SERVER=${EMBY_SERVER:-}
+      - EMBY_TOKEN=${EMBY_TOKEN:-}
+      - EMBY_PROC_ADDED_MEDIA=${EMBY_PROC_ADDED_MEDIA:-true}
+      - EMBY_PROC_MEDIA_ON_PLAY=${EMBY_PROC_MEDIA_ON_PLAY:-false}
+      
+      # ===== PATH MAPPING (for container path translation) =====
+      - USE_PATH_MAPPING=${USE_PATH_MAPPING:-false}
+      - PATH_MAPPING_FROM=${PATH_MAPPING_FROM:-}
+      - PATH_MAPPING_TO=${PATH_MAPPING_TO:-}
+      
+      # ===== SKIP SETTINGS =====
+      - SKIP_IF_TARGET_SUBTITLES_EXIST=${SKIP_IF_TARGET_SUBTITLES_EXIST:-true}
+      - SKIP_IF_INTERNAL_SUBTITLES_LANGUAGE=${SKIP_IF_INTERNAL_SUBTITLES_LANGUAGE:-}
+      - SKIP_IF_EXTERNAL_SUBTITLES_EXIST=${SKIP_IF_EXTERNAL_SUBTITLES_EXIST:-false}
+      - SKIP_ONLY_SUBGEN_SUBTITLES=${SKIP_ONLY_SUBGEN_SUBTITLES:-false}
+      - SKIP_IF_AUDIO_TRACK_IS=${SKIP_IF_AUDIO_TRACK_IS:-}
+      - SKIP_SUBTITLE_LANGUAGES=${SKIP_SUBTITLE_LANGUAGES:-}
+      - SKIP_UNKNOWN_LANGUAGE=${SKIP_UNKNOWN_LANGUAGE:-false}
+      - SKIP_IF_NO_LANGUAGE_BUT_SUBTITLES_EXIST=${SKIP_IF_NO_LANGUAGE_BUT_SUBTITLES_EXIST:-false}
+      
+      # ===== TRANSCRIPTION OPTIONS =====
+      - FORCE_DETECTED_LANGUAGE_TO=${FORCE_DETECTED_LANGUAGE_TO:-}
+      - APPEND=${APPEND:-false}
+      - LRC_FOR_AUDIO_FILES=${LRC_FOR_AUDIO_FILES:-true}
+      - PREFERRED_AUDIO_LANGUAGES=${PREFERRED_AUDIO_LANGUAGES:-eng}
+      - LIMIT_TO_PREFERRED_AUDIO_LANGUAGE=${LIMIT_TO_PREFERRED_AUDIO_LANGUAGE:-false}
+      - DETECT_LANGUAGE_LENGTH=${DETECT_LANGUAGE_LENGTH:-30}
+      - DETECT_LANGUAGE_OFFSET=${DETECT_LANGUAGE_OFFSET:-0}
+      
+      # ===== SUBTITLE NAMING =====
+      - SUBTITLE_LANGUAGE_NAMING_TYPE=${SUBTITLE_LANGUAGE_NAMING_TYPE:-ISO_639_2_B}
+      - SUBTITLE_LANGUAGE_NAME=${SUBTITLE_LANGUAGE_NAME:-}
+      - SHOW_IN_SUBNAME_SUBGEN=${SHOW_IN_SUBNAME_SUBGEN:-false}
+      
+      # ===== NOTIFICATIONS (Pushover) =====
+      - PUSHOVER_USER_KEY=${PUSHOVER_USER_KEY:-}
+      - PUSHOVER_API_TOKEN=${PUSHOVER_API_TOKEN:-}
+      - NOTIFY_ON_FAILURE=${NOTIFY_ON_FAILURE:-true}
+    
+    volumes:
+      # Mount your media directories (adjust paths as needed)
+      - ${TV_PATH:-/mnt/tv}:/tv
+      - ${MOVIES_PATH:-/mnt/movies}:/movies
+      # If using path mapping, make sure paths are consistent
+      
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s

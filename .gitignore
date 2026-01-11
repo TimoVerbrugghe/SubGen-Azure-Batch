@@ -6,7 +6,17 @@
 # Built Visual Studio Code Extensions
 *.vsix
 
-#ignore our settings
-subgen.env
+# Test environment variables (contains secrets)
+tests/.env
 
-models/
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.env
+.venv
+env/
+venv/
+ENV/

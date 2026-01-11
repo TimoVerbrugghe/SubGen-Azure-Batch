@@ -1,4 +1,11 @@
+"""
+Language code definitions for SubGen-Azure-Batch.
+
+Provides ISO 639 language code mappings and utilities.
+"""
+
 from enum import Enum
+
 
 class LanguageCode(Enum):
     # ISO 639-1, ISO 639-2/T, ISO 639-2/B, English Name, Native Name
@@ -38,7 +45,7 @@ class LanguageCode(Enum):
     CROATIAN = ("hr", "hrv", "hrv", "Croatian", "Hrvatski")
     HAITIAN_CREOLE = ("ht", "hat", "hat", "Haitian Creole", "Kreyòl Ayisyen")
     HUNGARIAN = ("hu", "hun", "hun", "Hungarian", "Magyar")
-    ARMENIAN = ("hy", "hye", "arm", "Armenian", "Հայերեն")
+    ARMENIAN = ("hy", "hye", "arm", "Armenian", "Հdelays")
     INDONESIAN = ("id", "ind", "ind", "Indonesian", "Bahasa Indonesia")
     ICELANDIC = ("is", "isl", "ice", "Icelandic", "Íslenska")
     ITALIAN = ("it", "ita", "ita", "Italian", "Italiano")
@@ -103,8 +110,7 @@ class LanguageCode(Enum):
     YORUBA = ("yo", "yor", "yor", "Yoruba", "Yorùbá")
     CHINESE = ("zh", "zho", "chi", "Chinese", "中文")
     CANTONESE = ("yue", "yue", "yue", "Cantonese", "粵語")
-    NONE = (None, None, None, None, None)  # For no language
-    # und for Undetermined aka unknown language https://www.loc.gov/standards/iso639-2/faq.html#25
+    NONE = (None, None, None, None, None)
 
     def __init__(self, iso_639_1, iso_639_2_t, iso_639_2_b, name_en, name_native):
         self.iso_639_1 = iso_639_1
@@ -128,19 +134,18 @@ class LanguageCode(Enum):
         return LanguageCode.NONE
 
     @staticmethod
-    def from_name(name : str):
+    def from_name(name: str):
         """Convert a language name (either English or native) to LanguageCode enum."""
         for lang in LanguageCode:
-            if lang.name_en.lower() == name.lower() or lang.name_native.lower() == name.lower():
+            if lang.name_en and lang.name_en.lower() == name.lower():
                 return lang
-        LanguageCode.NONE
-        
+            if lang.name_native and lang.name_native.lower() == name.lower():
+                return lang
+        return LanguageCode.NONE
 
     @staticmethod    
     def from_string(value: str):
-        """
-        Convert a string to a LanguageCode instance. Matches on ISO codes, English name, or native name.
-        """
+        """Convert a string to a LanguageCode instance."""
         if value is None:
             return LanguageCode.NONE
         value = value.strip().lower()
@@ -151,17 +156,53 @@ class LanguageCode(Enum):
                 value == lang.iso_639_1
                 or value == lang.iso_639_2_t
                 or value == lang.iso_639_2_b
-                or value == lang.name_en.lower()
-                or value == lang.name_native.lower()
+                or (lang.name_en and value == lang.name_en.lower())
+                or (lang.name_native and value == lang.name_native.lower())
             ):
                 return lang
         return LanguageCode.NONE
     
-    # is valid language
     @staticmethod
     def is_valid_language(language: str):
         return LanguageCode.from_string(language) is not LanguageCode.NONE
     
+    def to_azure_locale(self) -> str:
+        """Convert to Azure Speech locale format (e.g., 'en-US')."""
+        locale_map = {
+            'en': 'en-US',
+            'de': 'de-DE',
+            'fr': 'fr-FR',
+            'es': 'es-ES',
+            'it': 'it-IT',
+            'pt': 'pt-BR',
+            'nl': 'nl-NL',
+            'ja': 'ja-JP',
+            'ko': 'ko-KR',
+            'zh': 'zh-CN',
+            'ru': 'ru-RU',
+            'ar': 'ar-SA',
+            'hi': 'hi-IN',
+            'tr': 'tr-TR',
+            'pl': 'pl-PL',
+            'cs': 'cs-CZ',
+            'da': 'da-DK',
+            'fi': 'fi-FI',
+            'el': 'el-GR',
+            'he': 'he-IL',
+            'hu': 'hu-HU',
+            'id': 'id-ID',
+            'no': 'nb-NO',
+            'ro': 'ro-RO',
+            'sk': 'sk-SK',
+            'sv': 'sv-SE',
+            'th': 'th-TH',
+            'uk': 'uk-UA',
+            'vi': 'vi-VN',
+        }
+        if self.iso_639_1:
+            return locale_map.get(self.iso_639_1, f"{self.iso_639_1}-{self.iso_639_1.upper()}")
+        return 'en-US'
+
     def to_iso_639_1(self):
         return self.iso_639_1
 
@@ -173,26 +214,20 @@ class LanguageCode(Enum):
 
     def to_name(self, in_english=True):
         return self.name_en if in_english else self.name_native
+    
     def __str__(self):
         if self.name_en is None:
             return "Unknown"
         return self.name_en
     
     def __bool__(self):
-        return True if self.iso_639_1 is not None else False
+        return self.iso_639_1 is not None
     
     def __eq__(self, other):
-        """
-        Compare the LanguageCode instance to another object.
-        Explicitly handle comparison to None.
-        """
         if other is None:
-            # If compared to None, return False unless self is None
             return self.iso_639_1 is None
-        if isinstance(other, str):  # Allow comparison with a string
-            return self.value == LanguageCode.from_string(other)
+        if isinstance(other, str):
+            return self == LanguageCode.from_string(other)
         if isinstance(other, LanguageCode):
-            # Normal comparison for LanguageCode instances
             return self.iso_639_1 == other.iso_639_1
-        # Otherwise, defer to the default equality
         return NotImplemented
