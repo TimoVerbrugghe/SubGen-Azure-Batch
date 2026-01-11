@@ -12,7 +12,6 @@ All transcription jobs are tracked in a unified session system for visibility.
 import asyncio
 import logging
 import os
-import tempfile
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -21,7 +20,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
-from app.audio_extractor import extract_audio
+from app.audio_extractor import extract_audio, make_temp_dir
 from app.azure_batch_transcriber import (AzureBatchTranscriber,
                                          TranscriptionResult)
 from app.config import format_duration, get_settings
@@ -299,7 +298,7 @@ class TranscriptionService:
             Tuple of (TranscriptionResult, TranscriptionJob).
         """
         settings = get_settings()
-        temp_dir = tempfile.mkdtemp(prefix="subgen_transcribe_")
+        temp_dir = make_temp_dir(prefix="subgen_transcribe_")
         
         # Create session and job for tracking
         session = await cls.create_session(source=source, notify_bazarr=False)

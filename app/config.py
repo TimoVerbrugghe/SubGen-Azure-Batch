@@ -280,6 +280,7 @@ class Settings:
     concurrent_transcriptions: int = 50
     job_poll_interval: int = 10  # seconds
     audio_format: str = "wav"  # Format for extracted audio
+    transcode_dir: str = "/transcode"  # Directory for temp audio files
     
     # Azure configuration
     azure: AzureConfig = field(default_factory=AzureConfig)
@@ -323,6 +324,7 @@ class Settings:
             concurrent_transcriptions=int(os.getenv('CONCURRENT_TRANSCRIPTIONS', '50')),
             job_poll_interval=int(os.getenv('JOB_POLL_INTERVAL', '10')),
             audio_format=os.getenv('AUDIO_FORMAT', 'wav'),
+            transcode_dir=os.getenv('TRANSCODE_DIR', '/transcode'),
             
             # Azure configuration
             azure=AzureConfig(

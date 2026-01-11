@@ -12,7 +12,34 @@ import tempfile
 from pathlib import Path
 from typing import Optional, Tuple
 
+from app.config import get_settings
+
 logger = logging.getLogger(__name__)
+
+
+def get_transcode_dir() -> Optional[str]:
+    """Get the transcode directory from settings, or None to use system temp."""
+    settings = get_settings()
+    if settings.transcode_dir:
+        # Ensure directory exists
+        os.makedirs(settings.transcode_dir, exist_ok=True)
+        return settings.transcode_dir
+    return None
+
+
+def make_temp_file(suffix: str) -> str:
+    """Create a temp file in the configured transcode directory."""
+    transcode_dir = get_transcode_dir()
+    fd, path = tempfile.mkstemp(suffix=suffix, dir=transcode_dir)
+    os.close(fd)
+    return path
+
+
+def make_temp_dir(prefix: str = "subgen_") -> str:
+    """Create a temp directory in the configured transcode directory."""
+    transcode_dir = get_transcode_dir()
+    return tempfile.mkdtemp(prefix=prefix, dir=transcode_dir)
+
 
 # Supported video file extensions (from original subgen.py)
 VIDEO_EXTENSIONS = {
@@ -156,9 +183,7 @@ async def extract_audio(
     
     # Determine output path
     if output_path is None:
-        suffix = f'.{output_format}'
-        fd, output_path = tempfile.mkstemp(suffix=suffix)
-        os.close(fd)
+        output_path = make_temp_file(suffix=f'.{output_format}')
     
     # Build ffmpeg command
     # Determine codec based on format
@@ -250,8 +275,7 @@ async def prepare_audio_for_transcription(
                 Path(media_path).stem + f'.{target_format}'
             )
         else:
-            fd, output_path = tempfile.mkstemp(suffix=f'.{target_format}')
-            os.close(fd)
+            output_path = make_temp_file(suffix=f'.{target_format}')
         
         cmd = [
             'ffmpeg',
@@ -333,8 +357,7 @@ async def extract_audio_segment(
     Returns:
         Path to the extracted audio segment (temp file).
     """
-    fd, output_path = tempfile.mkstemp(suffix=f'.{output_format}')
-    os.close(fd)
+    output_path = make_temp_file(suffix=f'.{output_format}')
     
     # Determine codec
     if output_format == 'wav':

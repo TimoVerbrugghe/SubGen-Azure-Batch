@@ -10,7 +10,6 @@ import os
 import random
 import shutil
 import string
-import tempfile
 import time
 import wave
 from pathlib import Path
@@ -19,7 +18,7 @@ from typing import Optional, Union
 from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
 
-from app.audio_extractor import extract_audio_segment
+from app.audio_extractor import extract_audio_segment, make_temp_dir
 from app.azure_batch_transcriber import AzureBatchTranscriber
 from app.config import (SUBGEN_AZURE_BATCH_VERSION, get_settings,
                         require_azure_configured)
@@ -236,7 +235,7 @@ async def detect_language(
     require_azure_configured()
     
     # Save uploaded file to temp location
-    temp_dir = tempfile.mkdtemp(prefix="subgen_detect_")
+    temp_dir = make_temp_dir(prefix="subgen_detect_")
     segment_audio: Optional[str] = None
     detected_language = LanguageCode.NONE
     language_code = 'und'

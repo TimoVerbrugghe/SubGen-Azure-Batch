@@ -161,6 +161,7 @@ Each module has a clear, single responsibility to maintain clean architecture an
 | `EMBY_TOKEN` | `` | Emby authentication token |
 | `EMBY_SERVER` | `` | Emby server URL |
 | `CONCURRENT_TRANSCRIPTIONS` | `50` | Maximum concurrent Azure batch jobs |
+| `TRANSCODE_DIR` | `` | Directory for temp audio files (mount a volume to reduce memory usage) |
 | `SKIP_IF_TARGET_SUBTITLES_EXIST` | `true` | Skip if target language subtitle exists |
 | `SKIP_IF_EXTERNAL_SUBTITLES_EXIST` | `false` | Skip if any external subtitle exists |
 | `SKIP_IF_INTERNAL_SUBTITLES_LANGUAGE` | `` | Skip if internal subs in language (e.g., `en`) |

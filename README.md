@@ -166,6 +166,7 @@ The following environment variables are available in Docker. They will default t
 | SUBTITLE_LANGUAGE | '' | Default subtitle language code (leave empty for auto-detect) |
 | **Processing Settings** |||
 | CONCURRENT_TRANSCRIPTIONS | 50 | **(Changed)** Number of jobs to process in parallel. Default increased for cloud processing |
+| TRANSCODE_DIR | '/transcode' | **(New)** Directory for temp audio files. Mount a volume here to reduce memory usage during batch processing |
 | JOB_POLL_INTERVAL | 10 | **(New)** Seconds between polling Azure for job status |
 | PROCESS_ADDED_MEDIA | False | Process media when added to library (requires webhook integration) |
 | PROCESS_MEDIA_ON_PLAY | False | Process media when played (requires webhook integration) |

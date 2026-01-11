@@ -25,9 +25,13 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY app/ ./app/
 
+# Create transcode directory for temp audio files (can be mounted as volume for disk-backed storage)
+RUN mkdir -p /transcode
+
 # Create non-root user for security
 RUN useradd --create-home --shell /bin/bash subgen \
-    && chown -R subgen:subgen /app
+    && chown -R subgen:subgen /app \
+    && chown -R subgen:subgen /transcode
 
 USER subgen
 
