@@ -28,6 +28,26 @@ class TestJobStatus:
         assert JobStatus.TRANSCRIBING == "transcribing"
         assert JobStatus.COMPLETED == "completed"
         assert JobStatus.FAILED == "failed"
+        assert JobStatus.CANCELLED == "cancelled"
+
+
+class TestTranscriptionCancelledError:
+    """Test TranscriptionCancelledError exception."""
+    
+    def test_exception_creation(self):
+        """Test creating the cancellation exception."""
+        from app.transcription_service import TranscriptionCancelledError
+        
+        error = TranscriptionCancelledError("Job was cancelled")
+        assert str(error) == "Job was cancelled"
+        assert isinstance(error, Exception)
+    
+    def test_exception_can_be_raised_and_caught(self):
+        """Test that the exception can be raised and caught."""
+        from app.transcription_service import TranscriptionCancelledError
+        
+        with pytest.raises(TranscriptionCancelledError, match="cancelled"):
+            raise TranscriptionCancelledError("Operation cancelled")
 
 
 class TestJobSource:
@@ -95,6 +115,9 @@ class TestTranscriptionJob:
         
         job.status = JobStatus.FAILED
         assert job.get_status_text() == "Failed"
+        
+        job.status = JobStatus.CANCELLED
+        assert job.get_status_text() == "Cancelled"
     
     def test_to_dict(self):
         """Test job serialization to dictionary."""

@@ -111,6 +111,90 @@ class TestMediaExtensions:
         assert MEDIA_EXTENSIONS == VIDEO_EXTENSIONS | AUDIO_EXTENSIONS
 
 
+class TestTranscodeDir:
+    """Test transcode directory helper functions."""
+    
+    def test_get_transcode_dir_when_empty(self):
+        """Test get_transcode_dir returns None when transcode_dir is empty."""
+        from app.audio_extractor import get_transcode_dir
+        
+        mock_settings = MagicMock()
+        mock_settings.transcode_dir = ""
+        
+        with patch('app.audio_extractor.get_settings', return_value=mock_settings):
+            result = get_transcode_dir()
+            assert result is None
+    
+    def test_get_transcode_dir_when_set(self):
+        """Test get_transcode_dir returns path and creates directory."""
+        from app.audio_extractor import get_transcode_dir
+        
+        with tempfile.TemporaryDirectory() as temp_dir:
+            transcode_path = os.path.join(temp_dir, "transcode")
+            mock_settings = MagicMock()
+            mock_settings.transcode_dir = transcode_path
+            
+            with patch('app.audio_extractor.get_settings', return_value=mock_settings):
+                result = get_transcode_dir()
+                assert result == transcode_path
+                assert os.path.isdir(transcode_path)
+    
+    def test_make_temp_file_uses_transcode_dir(self):
+        """Test make_temp_file creates file in transcode directory."""
+        from app.audio_extractor import make_temp_file
+        
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with patch('app.audio_extractor.get_transcode_dir', return_value=temp_dir):
+                temp_path = make_temp_file(suffix='.wav')
+                try:
+                    assert temp_path.endswith('.wav')
+                    assert temp_path.startswith(temp_dir)
+                    assert os.path.exists(temp_path)
+                finally:
+                    if os.path.exists(temp_path):
+                        os.unlink(temp_path)
+    
+    def test_make_temp_file_uses_system_temp_when_none(self):
+        """Test make_temp_file uses system temp when transcode_dir is None."""
+        from app.audio_extractor import make_temp_file
+        
+        with patch('app.audio_extractor.get_transcode_dir', return_value=None):
+            temp_path = make_temp_file(suffix='.wav')
+            try:
+                assert temp_path.endswith('.wav')
+                assert os.path.exists(temp_path)
+            finally:
+                if os.path.exists(temp_path):
+                    os.unlink(temp_path)
+    
+    def test_make_temp_dir_uses_transcode_dir(self):
+        """Test make_temp_dir creates directory in transcode directory."""
+        from app.audio_extractor import make_temp_dir
+        
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with patch('app.audio_extractor.get_transcode_dir', return_value=temp_dir):
+                temp_path = make_temp_dir(prefix="test_")
+                try:
+                    assert temp_path.startswith(temp_dir)
+                    assert os.path.isdir(temp_path)
+                    assert "test_" in os.path.basename(temp_path)
+                finally:
+                    if os.path.isdir(temp_path):
+                        os.rmdir(temp_path)
+    
+    def test_make_temp_dir_uses_system_temp_when_none(self):
+        """Test make_temp_dir uses system temp when transcode_dir is None."""
+        from app.audio_extractor import make_temp_dir
+        
+        with patch('app.audio_extractor.get_transcode_dir', return_value=None):
+            temp_path = make_temp_dir(prefix="test_")
+            try:
+                assert os.path.isdir(temp_path)
+            finally:
+                if os.path.isdir(temp_path):
+                    os.rmdir(temp_path)
+
+
 class TestGetMediaDuration:
     """Test get_media_duration function."""
     
@@ -212,9 +296,11 @@ class TestExtractAudio:
         mock_process.returncode = 0
         mock_process.communicate = AsyncMock(return_value=(b"", b""))
         
-        with patch('asyncio.create_subprocess_exec', return_value=mock_process):
-            output_path = await extract_audio(temp_video_file, output_format='wav')
-            assert output_path.endswith('.wav')
+        # Mock get_transcode_dir to return None (use system temp)
+        with patch('app.audio_extractor.get_transcode_dir', return_value=None):
+            with patch('asyncio.create_subprocess_exec', return_value=mock_process):
+                output_path = await extract_audio(temp_video_file, output_format='wav')
+                assert output_path.endswith('.wav')
     
     @pytest.mark.asyncio
     async def test_extract_audio_ffmpeg_failure(self, temp_video_file):
@@ -225,18 +311,22 @@ class TestExtractAudio:
         mock_process.returncode = 1
         mock_process.communicate = AsyncMock(return_value=(b"", b"FFmpeg error"))
         
-        with patch('asyncio.create_subprocess_exec', return_value=mock_process):
-            with pytest.raises(RuntimeError, match="Audio extraction failed"):
-                await extract_audio(temp_video_file)
+        # Mock get_transcode_dir to return None (use system temp)
+        with patch('app.audio_extractor.get_transcode_dir', return_value=None):
+            with patch('asyncio.create_subprocess_exec', return_value=mock_process):
+                with pytest.raises(RuntimeError, match="Audio extraction failed"):
+                    await extract_audio(temp_video_file)
     
     @pytest.mark.asyncio
     async def test_extract_audio_ffmpeg_not_found(self, temp_video_file):
         """Test RuntimeError when FFmpeg is not installed."""
         from app.audio_extractor import extract_audio
-        
-        with patch('asyncio.create_subprocess_exec', side_effect=FileNotFoundError()):
-            with pytest.raises(RuntimeError, match="FFmpeg not found"):
-                await extract_audio(temp_video_file)
+
+        # Mock get_transcode_dir to return None (use system temp)
+        with patch('app.audio_extractor.get_transcode_dir', return_value=None):
+            with patch('asyncio.create_subprocess_exec', side_effect=FileNotFoundError()):
+                with pytest.raises(RuntimeError, match="FFmpeg not found"):
+                    await extract_audio(temp_video_file)
 
 
 class TestPrepareAudioForTranscription:

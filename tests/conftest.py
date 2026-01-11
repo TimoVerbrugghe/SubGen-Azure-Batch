@@ -183,6 +183,7 @@ def mock_settings():
     settings.subtitle_language = "en"
     settings.media_folders = ["/media/tv", "/media/movies"]
     settings.concurrent_jobs = 2
+    settings.transcode_dir = ""  # Empty string means use system temp
     settings.host = "0.0.0.0"
     settings.port = 8090
     settings.debug = False
