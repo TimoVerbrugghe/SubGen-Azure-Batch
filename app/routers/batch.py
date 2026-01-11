@@ -43,6 +43,7 @@ class JobStatus(str, Enum):
     TRANSCRIBING = "transcribing"
     COMPLETED = "completed"
     FAILED = "failed"
+    CANCELLED = "cancelled"
     
     @classmethod
     def from_service_status(cls, status: ServiceJobStatus) -> "JobStatus":
@@ -54,6 +55,7 @@ class JobStatus(str, Enum):
             ServiceJobStatus.TRANSCRIBING: cls.TRANSCRIBING,
             ServiceJobStatus.COMPLETED: cls.COMPLETED,
             ServiceJobStatus.FAILED: cls.FAILED,
+            ServiceJobStatus.CANCELLED: cls.CANCELLED,
         }
         return mapping.get(status, cls.PENDING)
 
@@ -142,6 +144,7 @@ class SessionStatusResponse(BaseModel):
     in_progress: int
     completed: int
     failed: int
+    cancelled: int = 0
     jobs: List[JobStatusResponse]
     skipped: List[dict] = []  # Skipped files from submission
 
@@ -160,6 +163,8 @@ def get_status_text(status: JobStatus, progress: int) -> str:
         return "Completed"
     elif status == JobStatus.FAILED:
         return "Failed"
+    elif status == JobStatus.CANCELLED:
+        return "Cancelled"
     return ""
 
 
@@ -168,24 +173,26 @@ async def _notify_bazarr_for_completed_jobs(session_id: str, session: Transcript
     Notify Bazarr about completed transcriptions using smart path-based lookup.
     
     Instead of a full disk scan, this:
-    1. Collects all completed file paths
+    1. Collects all completed file paths (excluding audio files - Bazarr is for video only)
     2. Looks up unique series/movie IDs by path
     3. Triggers targeted scans for each unique series/movie
     
     Falls back to full disk scan if no specific items found.
     """
+    from app.audio_extractor import is_audio_file
+    
     settings = get_settings()
     bazarr = BazarrClient(settings.bazarr.url, settings.bazarr.api_key)
     
     try:
-        # Collect completed file paths
+        # Collect completed file paths, excluding audio files (Bazarr is for video subtitles only)
         completed_paths = [
             job.file_path for job in session.jobs.values()
-            if job.status == JobStatus.COMPLETED
+            if job.status == JobStatus.COMPLETED and not is_audio_file(job.file_path)
         ]
         
         if not completed_paths:
-            logger.debug(f"[{session_id}] No completed jobs, skipping Bazarr notification")
+            logger.debug(f"[{session_id}] No completed video jobs, skipping Bazarr notification")
             return
         
         # Track unique series/movie IDs to avoid duplicate scans
@@ -200,7 +207,7 @@ async def _notify_bazarr_for_completed_jobs(session_id: str, session: Transcript
                 if series_id and series_id not in scanned_series:
                     await bazarr.trigger_series_scan(series_id)
                     scanned_series.add(series_id)
-                    logger.debug(f"[{session_id}] Triggered Bazarr scan for series {series_id}")
+                    logger.info(f"[{session_id}] Bazarr: Triggered disk scan for series {series_id}")
                 continue
             
             # Try to find matching movie
@@ -210,7 +217,7 @@ async def _notify_bazarr_for_completed_jobs(session_id: str, session: Transcript
                 if movie_id and movie_id not in scanned_movies:
                     await bazarr.trigger_movie_scan(movie_id)
                     scanned_movies.add(movie_id)
-                    logger.debug(f"[{session_id}] Triggered Bazarr scan for movie {movie_id}")
+                    logger.info(f"[{session_id}] Bazarr: Triggered disk scan for movie {movie_id}")
         
         total_scans = len(scanned_series) + len(scanned_movies)
         if total_scans > 0:
@@ -253,7 +260,10 @@ async def process_batch_job(session_id: str, job_id: str):
             job_id=job_id,  # Use existing job
             save_srt=True,
         )
-        logger.info(f"[{job_id}] Transcription complete: {len(result.segments)} segments")
+        
+        # result is None if job was cancelled
+        if result is not None:
+            logger.info(f"[{job_id}] Transcription complete: {len(result.segments)} segments")
         
     except Exception as e:
         logger.exception(f"[{job_id}] Failed: {e}")
@@ -429,6 +439,8 @@ async def get_session_status(session_id: str):
                     if j.status == ServiceJobStatus.COMPLETED)
     failed = sum(1 for j in session.jobs.values() 
                  if j.status == ServiceJobStatus.FAILED)
+    cancelled = sum(1 for j in session.jobs.values() 
+                    if j.status == ServiceJobStatus.CANCELLED)
     
     jobs = [
         JobStatusResponse(
@@ -450,6 +462,7 @@ async def get_session_status(session_id: str):
         in_progress=in_progress,
         completed=completed,
         failed=failed,
+        cancelled=cancelled,
         jobs=jobs,
         skipped=metadata.get('skipped', []),
     )
@@ -491,6 +504,32 @@ async def delete_session(session_id: str):
     return {"status": "deleted", "session_id": session_id}
 
 
+@router.post("/session/{session_id}/cancel")
+async def cancel_session(session_id: str):
+    """
+    Cancel a batch session.
+    
+    Marks all pending/in-progress jobs as cancelled and cleans up Azure resources
+    (uploaded blobs and transcription jobs).
+    """
+    session = TranscriptionService.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    try:
+        result = await TranscriptionService.cancel_session(session_id)
+        return {
+            "status": "cancelled",
+            "session_id": session_id,
+            "cancelled_jobs": result["cancelled"],
+            "cleaned_blobs": result["cleaned_blobs"],
+            "errors": result["errors"],
+        }
+    except Exception as e:
+        logger.error(f"Failed to cancel session {session_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/sessions")
 async def list_sessions():
     """List all active batch sessions with full job details (includes Bazarr jobs)."""
@@ -502,6 +541,8 @@ async def list_sessions():
                         if j.status == ServiceJobStatus.COMPLETED)
         failed = sum(1 for j in session.jobs.values() 
                      if j.status == ServiceJobStatus.FAILED)
+        cancelled = sum(1 for j in session.jobs.values() 
+                        if j.status == ServiceJobStatus.CANCELLED)
         
         metadata = _batch_metadata.get(session.id, {})
         
@@ -524,6 +565,7 @@ async def list_sessions():
             "total_jobs": len(session.jobs),
             "completed": completed,
             "failed": failed,
+            "cancelled": cancelled,
             "created_at": session.created_at.isoformat(),
             "jobs": jobs,
         })

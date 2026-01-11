@@ -30,6 +30,11 @@ from app.language_code import LanguageCode
 logger = logging.getLogger(__name__)
 
 
+class TranscriptionCancelledError(Exception):
+    """Raised when a transcription job is cancelled."""
+    pass
+
+
 class JobStatus(str, Enum):
     """Transcription job status."""
     PENDING = "pending"
@@ -38,6 +43,7 @@ class JobStatus(str, Enum):
     TRANSCRIBING = "transcribing"
     COMPLETED = "completed"
     FAILED = "failed"
+    CANCELLED = "cancelled"
 
 
 class JobSource(str, Enum):
@@ -78,6 +84,7 @@ class TranscriptionJob:
             JobStatus.TRANSCRIBING: "Transcribing",
             JobStatus.COMPLETED: "Completed",
             JobStatus.FAILED: "Failed",
+            JobStatus.CANCELLED: "Cancelled",
         }
         return status_map.get(self.status, "")
     
@@ -339,7 +346,7 @@ class TranscriptionService:
                 # Upload to Azure
                 audio_url, blob_name = await transcriber.upload_audio(ogg_path)
                 job.blob_name = blob_name
-                logger.info(f"[{job.id}] Uploaded to Azure: {blob_name}")
+                logger.info(f"[Session {session.id}] [{job.id}] Uploaded to Azure: {blob_name}")
                 
                 # Create transcription job
                 await cls.update_job_status(session.id, job.id, JobStatus.TRANSCRIBING)
@@ -350,7 +357,7 @@ class TranscriptionService:
                     display_name=f"{source.value}-{Path(file_name).stem if file_name != 'unknown' else job.id}"
                 )
                 job.azure_job_id = azure_job.id
-                logger.info(f"[{job.id}] Created Azure job: {azure_job.id}")
+                logger.info(f"[Session {session.id}] [{job.id}] Created Azure transcription: {azure_job.id}")
                 
                 # Wait for completion with periodic logging
                 result = await cls._wait_for_transcription_with_logging(
@@ -371,13 +378,14 @@ class TranscriptionService:
                 if job.blob_name:
                     try:
                         await transcriber.delete_blob(job.blob_name)
-                        logger.debug(f"[{job.id}] Deleted blob: {job.blob_name}")
+                        logger.info(f"[Session {session.id}] [{job.id}] Deleted Azure blob: {job.blob_name}")
                     except Exception as e:
-                        logger.warning(f"[{job.id}] Failed to delete blob: {e}")
+                        logger.warning(f"[Session {session.id}] [{job.id}] Failed to delete blob: {e}")
                 
                 if job.azure_job_id:
                     try:
                         await transcriber.delete_transcription(job.azure_job_id)
+                        logger.info(f"[Session {session.id}] [{job.id}] Deleted Azure transcription: {job.azure_job_id}")
                         logger.debug(f"[{job.id}] Deleted Azure job: {job.azure_job_id}")
                     except Exception as e:
                         logger.warning(f"[{job.id}] Failed to delete Azure job: {e}")
@@ -454,6 +462,11 @@ class TranscriptionService:
             # Convert language
             azure_locale = cls._get_azure_locale(language)
             
+            # Check if cancelled before upload
+            if job.status == JobStatus.CANCELLED:
+                logger.info(f"[{job.id}] Job cancelled before upload")
+                raise TranscriptionCancelledError("Cancelled before upload")
+            
             # Upload and transcribe
             await cls.update_job_status(session.id, job.id, JobStatus.UPLOADING)
             
@@ -462,6 +475,11 @@ class TranscriptionService:
                 audio_url, blob_name = await transcriber.upload_audio(audio_path)
                 job.blob_name = blob_name
                 logger.info(f"[{job.id}] Uploaded: {blob_name}")
+                
+                # Check if cancelled before starting transcription
+                if job.status == JobStatus.CANCELLED:
+                    logger.info(f"[{job.id}] Job cancelled before transcription")
+                    raise TranscriptionCancelledError("Cancelled before transcription")
                 
                 await cls.update_job_status(session.id, job.id, JobStatus.TRANSCRIBING)
                 
@@ -496,10 +514,10 @@ class TranscriptionService:
                     # Check if this is an audio file and LRC is enabled
                     if is_audio_file(file_path) and settings.transcription.lrc_for_audio_files:
                         output_path = save_lrc(srt_content, file_path, language)
-                        logger.info(f"[{job.id}] Saved LRC: {output_path}")
+                        logger.info(f"[Session {session.id}] [{job.id}] Saved LRC: {output_path}")
                     else:
                         output_path = save_srt_file(srt_content, file_path, language)
-                        logger.info(f"[{job.id}] Saved SRT: {output_path}")
+                        logger.info(f"[Session {session.id}] [{job.id}] Saved SRT: {output_path}")
                     
                     job.srt_path = output_path
                 
@@ -511,9 +529,9 @@ class TranscriptionService:
                         refresh_results = await refresh_by_file_path(file_path)
                         refreshed = [k for k, v in refresh_results.items() if v]
                         if refreshed:
-                            logger.info(f"[{job.id}] Refreshed metadata on: {', '.join(refreshed)}")
+                            logger.info(f"[Session {session.id}] [{job.id}] Refreshed metadata on: {', '.join(refreshed)}")
                     except Exception as e:
-                        logger.warning(f"[{job.id}] Media server refresh failed: {e}")
+                        logger.warning(f"[Session {session.id}] [{job.id}] Media server refresh failed: {e}")
                 
                 await cls.update_job_status(
                     session.id, job.id, JobStatus.COMPLETED,
@@ -541,6 +559,11 @@ class TranscriptionService:
                     Path(audio_path).unlink()
                 except Exception:
                     pass
+        
+        except TranscriptionCancelledError:
+            # Job was cancelled - don't mark as failed, just exit silently
+            logger.info(f"[{job.id}] Transcription cancelled, cleanup complete")
+            return None, job
                     
         except Exception as e:
             await cls.update_job_status(
@@ -564,6 +587,11 @@ class TranscriptionService:
         last_log_time = time.time()
         
         while poll_count < max_polls:
+            # Check if job was cancelled
+            if job.status == JobStatus.CANCELLED:
+                logger.info(f"[{job.id}] Job was cancelled, stopping poll loop")
+                raise TranscriptionCancelledError("Transcription was cancelled")
+            
             azure_job = await transcriber.get_transcription_status(azure_job_id)
             
             # Log status changes
@@ -642,6 +670,71 @@ class TranscriptionService:
         
         lang_lower = language.lower()
         return default_regions.get(lang_lower, f"{lang_lower}-{lang_lower.upper()}")
+    
+    @classmethod
+    async def cancel_session(cls, session_id: str) -> dict:
+        """
+        Cancel a session: mark pending/in-progress jobs as cancelled and cleanup Azure resources.
+        
+        Args:
+            session_id: Session ID to cancel.
+            
+        Returns:
+            Dict with cancellation results: {cancelled: int, cleaned_blobs: int, errors: list}
+        """
+        session = cls._sessions.get(session_id)
+        if not session:
+            raise ValueError(f"Session not found: {session_id}")
+        
+        cancelled_count = 0
+        cleaned_blobs = 0
+        errors = []
+        
+        transcriber = None
+        
+        try:
+            # Use default constructor - reads settings automatically
+            transcriber = AzureBatchTranscriber()
+            
+            for job in session.jobs.values():
+                # Only cancel jobs that aren't already completed or failed
+                if job.status in (JobStatus.PENDING, JobStatus.EXTRACTING, 
+                                  JobStatus.UPLOADING, JobStatus.TRANSCRIBING):
+                    job.status = JobStatus.CANCELLED
+                    job.completed_at = datetime.now()
+                    cancelled_count += 1
+                    logger.info(f"[Session {session_id}] [{job.id}] Cancelled job")
+                    
+                    # Try to cleanup Azure blob if uploaded
+                    if job.blob_name:
+                        try:
+                            await transcriber.delete_blob(job.blob_name)
+                            cleaned_blobs += 1
+                            logger.info(f"[Session {session_id}] [{job.id}] Deleted blob: {job.blob_name}")
+                        except Exception as e:
+                            errors.append(f"Failed to delete blob {job.blob_name}: {e}")
+                            logger.warning(f"[Session {session_id}] [{job.id}] Failed to delete blob: {e}")
+                    
+                    # Try to cleanup Azure transcription job if created
+                    if job.azure_job_id:
+                        try:
+                            await transcriber.delete_transcription(job.azure_job_id)
+                            logger.info(f"[Session {session_id}] [{job.id}] Deleted transcription: {job.azure_job_id}")
+                        except Exception as e:
+                            errors.append(f"Failed to delete transcription {job.azure_job_id}: {e}")
+                            logger.warning(f"[Session {session_id}] [{job.id}] Failed to delete transcription: {e}")
+        
+        finally:
+            if transcriber:
+                await transcriber.close()
+        
+        logger.info(f"[Session {session_id}] Cancelled {cancelled_count} jobs, cleaned {cleaned_blobs} blobs")
+        
+        return {
+            "cancelled": cancelled_count,
+            "cleaned_blobs": cleaned_blobs,
+            "errors": errors,
+        }
     
     @classmethod
     async def delete_session(cls, session_id: str) -> bool:

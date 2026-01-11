@@ -27,6 +27,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Suppress verbose Azure SDK HTTP logging
+logging.getLogger("azure.core.pipeline.policies.http_logging_policy").setLevel(logging.WARNING)
+
 # Reduce noise from uvicorn access logs for status polling
 class SuppressStatusPollingFilter(logging.Filter):
     """Filter out noisy status polling requests from access logs."""

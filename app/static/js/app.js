@@ -266,13 +266,14 @@ class SubGenApp {
                 method: 'POST'
             });
             const result = await response.json();
-            
-            if (result.pushover?.success) {
+            const pushover = result.results?.pushover;
+
+            if (pushover?.success) {
                 this.showToast('Test notification sent successfully!', 'success');
-            } else if (result.pushover?.error) {
-                this.showToast(`Notification failed: ${result.pushover.error}`, 'error');
-            } else if (!result.pushover?.configured) {
-                this.showToast('Pushover not configured', 'warning');
+            } else if (pushover?.error) {
+                this.showToast(`Notification failed: ${pushover.error}`, 'error');
+            } else if (!pushover?.configured) {
+                this.showToast('Pushover is not configured', 'warning');
             } else {
                 this.showToast('Failed to send test notification', 'error');
             }
@@ -330,14 +331,32 @@ class SubGenApp {
         } else {
             // Expand folder - load contents if not cached
             if (!this.folderContents.has(path)) {
+                // Show loading spinner on the toggle
+                const folderItem = document.querySelector(`.file-item-dir[data-path="${CSS.escape(path)}"]`);
+                const toggle = folderItem?.querySelector('.folder-toggle');
+                if (toggle) {
+                    toggle.dataset.originalContent = toggle.textContent;
+                    toggle.innerHTML = '<span class="spinner-small"></span>';
+                }
+                
                 try {
                     const response = await fetch(`/api/files?path=${encodeURIComponent(path)}`);
                     if (response.ok) {
                         const data = await response.json();
                         this.folderContents.set(path, data.items);
+                        
+                        // If this folder (or a parent) is selected, mark newly loaded files as selected
+                        if (this.isFolderSelected(path)) {
+                            this.selectCachedFilesInFolder(path);
+                        }
                     }
                 } catch (error) {
                     console.error('Failed to load folder:', error);
+                    // Restore toggle on error
+                    if (toggle && toggle.dataset.originalContent) {
+                        toggle.textContent = toggle.dataset.originalContent;
+                    }
+                    return;
                 }
             }
             this.expandedFolders.add(path);
@@ -396,7 +415,7 @@ class SubGenApp {
                     <div class="file-item file-item-file ${isSelected ? 'selected' : ''} ${hasSubtitle}" data-path="${item.path}" style="padding-left: ${12 + indent + 24}px">
                         <input type="checkbox" class="file-checkbox" ${isSelected ? 'checked' : ''}>
                         <span class="file-icon">${icon}</span>
-                        <span class="file-name">${item.name}</span>
+                        <span class="file-name" title="${item.name}">${item.name}</span>
                         <span class="file-size">${size}</span>
                     </div>
                 `;
@@ -417,7 +436,7 @@ class SubGenApp {
             });
         });
         
-        // Folder selection
+        // Folder selection (now synchronous - no API calls needed)
         fileList.querySelectorAll('.file-item-dir').forEach(item => {
             item.addEventListener('click', (e) => {
                 if (e.target.classList.contains('folder-toggle') || 
@@ -453,47 +472,83 @@ class SubGenApp {
     }
     
     toggleFolderSelection(path, forceState = null) {
-        const isCurrentlySelected = this.selectedFolders.has(path);
+        const isCurrentlySelected = this.isFolderSelected(path);
         const shouldSelect = forceState === true || (forceState === null && !isCurrentlySelected);
         
         if (shouldSelect) {
+            // Just add this folder - backend will expand it
             this.selectedFolders.add(path);
-            // Select all files in this folder (recursively from cached contents)
-            this.selectAllFilesInFolder(path);
+            // Remove any child folders from explicit selection (parent covers them)
+            this.removeChildFolderSelections(path);
+            // Also select any visible files in cached contents (for UI feedback)
+            this.selectCachedFilesInFolder(path);
         } else {
             this.selectedFolders.delete(path);
-            // Deselect all files in this folder
-            this.deselectAllFilesInFolder(path);
+            // Deselect cached files in this folder
+            this.deselectCachedFilesInFolder(path);
         }
         
         this.updateSelectionUI();
     }
     
-    selectAllFilesInFolder(folderPath) {
-        // Get cached contents for this folder
-        const items = this.folderContents.get(folderPath) || [];
+    isFolderSelected(folderPath) {
+        // A folder is selected if it's explicitly selected OR a parent is selected
+        if (this.selectedFolders.has(folderPath)) return true;
         
+        // Check if any parent is selected
+        for (const selected of this.selectedFolders) {
+            if (folderPath.startsWith(selected + '/')) return true;
+        }
+        return false;
+    }
+    
+    isFileInheritedSelected(filePath) {
+        // A file inherits selection if any parent folder is selected
+        for (const selected of this.selectedFolders) {
+            if (filePath.startsWith(selected + '/')) return true;
+        }
+        return false;
+    }
+    
+    removeChildFolderSelections(parentPath) {
+        // Remove any explicitly selected child folders (parent selection covers them)
+        for (const folder of Array.from(this.selectedFolders)) {
+            if (folder !== parentPath && folder.startsWith(parentPath + '/')) {
+                this.selectedFolders.delete(folder);
+            }
+        }
+        // Also remove explicitly selected files under this folder
+        for (const file of Array.from(this.selectedFiles)) {
+            if (file.startsWith(parentPath + '/')) {
+                this.selectedFiles.delete(file);
+            }
+        }
+    }
+    
+    selectCachedFilesInFolder(folderPath) {
+        // Only select files that are already cached (visible in UI)
+        const items = this.folderContents.get(folderPath) || [];
         for (const item of items) {
             if (item.is_dir) {
-                // Recursively select subfolders
-                this.selectedFolders.add(item.path);
-                this.selectAllFilesInFolder(item.path);
+                // Recursively for cached subfolders only
+                if (this.folderContents.has(item.path)) {
+                    this.selectCachedFilesInFolder(item.path);
+                }
             } else {
-                // Select all files regardless of subtitle status
                 this.selectedFiles.add(item.path);
             }
         }
     }
     
-    deselectAllFilesInFolder(folderPath) {
-        // Get cached contents for this folder
+    deselectCachedFilesInFolder(folderPath) {
+        // Only deselect files that are cached
         const items = this.folderContents.get(folderPath) || [];
-        
         for (const item of items) {
             if (item.is_dir) {
-                // Recursively deselect subfolders
                 this.selectedFolders.delete(item.path);
-                this.deselectAllFilesInFolder(item.path);
+                if (this.folderContents.has(item.path)) {
+                    this.deselectCachedFilesInFolder(item.path);
+                }
             } else {
                 this.selectedFiles.delete(item.path);
             }
@@ -502,37 +557,35 @@ class SubGenApp {
     
     getFolderSelectionState(folderPath) {
         // Returns: 'none', 'some', 'all'
+        
+        // If this folder or a parent is explicitly selected, it's 'all'
+        if (this.isFolderSelected(folderPath)) return 'all';
+        
+        // Check cached contents for partial selection
         const items = this.folderContents.get(folderPath) || [];
         if (items.length === 0) return 'none';
         
-        let selectableCount = 0;
-        let selectedCount = 0;
+        let hasSelected = false;
+        let hasUnselected = false;
         
         for (const item of items) {
             if (item.is_dir) {
                 const subState = this.getFolderSelectionState(item.path);
-                if (subState === 'all') {
-                    selectableCount++;
-                    selectedCount++;
-                } else if (subState === 'some') {
-                    selectableCount++;
-                    selectedCount += 0.5; // Partial
-                } else {
-                    // Check if folder has any selectable items
-                    const subItems = this.folderContents.get(item.path) || [];
-                    if (subItems.length > 0) selectableCount++;
-                }
+                if (subState === 'all') hasSelected = true;
+                else if (subState === 'some') { hasSelected = true; hasUnselected = true; }
+                else hasUnselected = true;
             } else {
-                // Count all files regardless of subtitle status
-                selectableCount++;
-                if (this.selectedFiles.has(item.path)) selectedCount++;
+                if (this.selectedFiles.has(item.path) || this.isFileInheritedSelected(item.path)) {
+                    hasSelected = true;
+                } else {
+                    hasUnselected = true;
+                }
             }
         }
         
-        if (selectableCount === 0) return 'none';
-        if (selectedCount === 0) return 'none';
-        if (selectedCount >= selectableCount) return 'all';
-        return 'some';
+        if (hasSelected && hasUnselected) return 'some';
+        if (hasSelected) return 'all';
+        return 'none';
     }
     
     toggleFileSelection(path, forceState = null) {
@@ -548,17 +601,10 @@ class SubGenApp {
     }
     
     updateParentFolderStates() {
-        // Update selectedFolders based on child selection states
-        // Clear and recalculate based on current file selections
-        this.selectedFolders.clear();
-        
-        // For each folder in cache, check if all its files are selected
-        for (const [folderPath, items] of this.folderContents) {
-            const state = this.getFolderSelectionState(folderPath);
-            if (state === 'all') {
-                this.selectedFolders.add(folderPath);
-            }
-        }
+        // When individual files are selected/deselected, we don't auto-select folders
+        // This avoids the complexity of determining "all files selected" 
+        // Folders are only selected when explicitly clicked
+        // Just trigger UI update - the getFolderSelectionState handles partial states
     }
     
     selectAllFiles() {
@@ -622,13 +668,23 @@ class SubGenApp {
             }
         });
         
-        // Update selection count (only count actual files)
+        // Update selection count - show files + folders
         const countEl = document.getElementById('selected-count');
-        if (countEl) countEl.textContent = this.selectedFiles.size;
+        if (countEl) {
+            const fileCount = this.selectedFiles.size;
+            const folderCount = this.selectedFolders.size;
+            if (folderCount > 0 && fileCount > 0) {
+                countEl.textContent = `${fileCount} files + ${folderCount} folders`;
+            } else if (folderCount > 0) {
+                countEl.textContent = `${folderCount} folder${folderCount > 1 ? 's' : ''}`;
+            } else {
+                countEl.textContent = fileCount;
+            }
+        }
         
-        // Update transcribe button
+        // Update transcribe button - enable if any selection
         const btn = document.getElementById('btn-transcribe');
-        if (btn) btn.disabled = this.selectedFiles.size === 0;
+        if (btn) btn.disabled = this.selectedFiles.size === 0 && this.selectedFolders.size === 0;
     }
     
     async startTranscription() {
@@ -641,13 +697,21 @@ class SubGenApp {
         const notifyBazarr = document.getElementById('notify-bazarr')?.checked ?? true;
         const skipIfExists = document.getElementById('skip-existing')?.checked ?? true;
         
+        // Filter out files that are under a selected folder (to avoid duplicates)
+        // Backend will expand folders, so we don't need to send individual files under them
+        const folders = Array.from(this.selectedFolders);
+        const files = Array.from(this.selectedFiles).filter(filePath => {
+            // Exclude file if any selected folder is its parent
+            return !folders.some(folderPath => filePath.startsWith(folderPath + '/'));
+        });
+        
         try {
             const response = await fetch('/api/batch/submit', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    files: Array.from(this.selectedFiles),
-                    folders: Array.from(this.selectedFolders),
+                    files: files,
+                    folders: folders,
                     language: language,
                     notify_bazarr: notifyBazarr,
                     skip_if_exists: skipIfExists,
@@ -711,15 +775,28 @@ class SubGenApp {
         // Render sessions
         let html = '';
         for (const [sessionId, session] of this.sessions) {
+            // Count cancelled jobs
+            const cancelledCount = (session.jobs || []).filter(j => j.status === 'cancelled').length;
+            
             const progress = session.total_jobs > 0 
-                ? Math.round((session.completed + session.failed) / session.total_jobs * 100) 
+                ? Math.round((session.completed + session.failed + cancelledCount) / session.total_jobs * 100) 
                 : 0;
             
+            // Check if session is still in progress (has pending/active jobs)
+            const inProgress = (session.jobs || []).some(j => 
+                ['pending', 'extracting', 'uploading', 'transcribing'].includes(j.status)
+            );
+            
             const statusClass = session.failed > 0 ? 'has-errors' : 
-                               session.completed === session.total_jobs ? 'complete' : 'in-progress';
+                               (session.completed === session.total_jobs || !inProgress) ? 'complete' : 'in-progress';
             
             const sourceLabel = session.source === 'bazarr' ? 'Bazarr' : 'Batch';
             const sourceClass = session.source === 'bazarr' ? 'source-bazarr' : 'source-ui';
+            
+            // Show cancel button only for in-progress sessions
+            const cancelButton = inProgress 
+                ? `<button class="btn-cancel" onclick="app.cancelSession('${sessionId}')">CANCEL</button>`
+                : '';
             
             html += `
                 <div class="session-card ${statusClass}" data-session-id="${sessionId}">
@@ -728,6 +805,8 @@ class SubGenApp {
                         <span class="session-stats">
                             ✅ ${session.completed} / ${session.total_jobs}
                             ${session.failed > 0 ? `❌ ${session.failed}` : ''}
+                            ${cancelledCount > 0 ? `🚫 ${cancelledCount}` : ''}
+                            ${cancelButton}
                         </span>
                     </div>
                     <div class="progress-bar">
@@ -793,9 +872,13 @@ class SubGenApp {
                 }
             }
             
+            // Show job ID (first 8 chars) for correlation with logs
+            const jobId = job.id ? job.id.substring(0, 8) : '';
+            
             return `
                 <div class="job-item ${job.status}">
                     <span class="job-status">${statusIcon}</span>
+                    <span class="job-id" title="Job ID: ${job.id}">[${jobId}]</span>
                     <span class="job-name" title="${job.file_path}">${fileName}</span>
                     ${statusTextHtml}
                     ${refreshHtml}
@@ -815,14 +898,46 @@ class SubGenApp {
             case 'transcribing': return '<span class="spinner"></span>';
             case 'completed': return '✅';
             case 'failed': return '❌';
+            case 'cancelled': return '🚫';
             default: return '❓';
+        }
+    }
+    
+    async cancelSession(sessionId) {
+        if (!confirm('Cancel this session? Pending jobs will be cancelled and Azure resources will be cleaned up.')) {
+            return;
+        }
+        
+        try {
+            const response = await fetch(`/api/batch/session/${sessionId}/cancel`, {
+                method: 'POST',
+            });
+            
+            if (response.ok) {
+                const result = await response.json();
+                this.showToast(
+                    `Cancelled ${result.cancelled_jobs} job(s), cleaned up ${result.cleaned_blobs} blob(s)`,
+                    'success'
+                );
+                // Refresh immediately
+                await this.updateSessionsList();
+            } else {
+                const error = await response.json();
+                this.showToast(`Failed to cancel: ${error.detail}`, 'error');
+            }
+        } catch (error) {
+            console.error('Failed to cancel session:', error);
+            this.showToast('Failed to cancel session', 'error');
         }
     }
     
     clearCompletedSessions() {
         for (const [sessionId, session] of this.sessions) {
+            // Count cancelled jobs for progress calculation
+            const cancelledCount = (session.jobs || []).filter(j => j.status === 'cancelled').length;
+            
             if (session.completed === session.total_jobs || 
-                (session.completed + session.failed) === session.total_jobs) {
+                (session.completed + session.failed + cancelledCount) === session.total_jobs) {
                 // Delete from server
                 fetch(`/api/batch/session/${sessionId}`, { method: 'DELETE' })
                     .catch(console.error);

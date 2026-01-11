@@ -183,15 +183,15 @@ class NotificationService:
             session = await self._get_session()
             async with session.post(self.PUSHOVER_API_URL, data=payload) as response:
                 if response.status == 200:
-                    logger.info(f"Pushover notification sent: {title}")
+                    logger.info(f"Pushover notification sent successfully: {title}")
                     return True
                 else:
                     error_text = await response.text()
-                    logger.error(f"Pushover notification failed ({response.status}): {error_text}")
+                    logger.error(f"Pushover notification failed (HTTP {response.status}): {error_text}")
                     return False
                     
         except Exception as e:
-            logger.error(f"Failed to send Pushover notification: {e}")
+            logger.error(f"Pushover notification error: {e}")
             return False
     
     async def notify_job_failed(

@@ -74,10 +74,10 @@ class PlexClient:
             session = await self._get_session()
             async with session.put(url) as response:
                 if response.status == 200:
-                    logger.info(f"Plex metadata refresh initiated for item {item_id}")
+                    logger.info(f"Plex: Metadata refresh sent for item {item_id}")
                     return True
                 else:
-                    logger.warning(f"Plex refresh failed: HTTP {response.status}")
+                    logger.warning(f"Plex: Metadata refresh failed (HTTP {response.status}) for item {item_id}")
                     return False
         except aiohttp.ClientError as e:
             logger.error(f"Plex refresh error: {e}")
@@ -123,66 +123,115 @@ class PlexClient:
             logger.error(f"Failed to get Plex file path: {e}")
             return None
     
+    async def get_library_sections(self) -> list:
+        """
+        Get all library sections from Plex.
+        
+        Returns:
+            List of library section dicts with 'key', 'title', 'type', and 'locations'.
+        """
+        if not self.is_configured:
+            return []
+        
+        url = f"{self.server}/library/sections"
+        
+        try:
+            session = await self._get_session()
+            async with session.get(url, headers={"Accept": "application/json"}) as response:
+                if response.status != 200:
+                    logger.warning(f"Plex: Failed to get library sections (HTTP {response.status})")
+                    return []
+                
+                data = await response.json()
+                sections = []
+                for directory in data.get("MediaContainer", {}).get("Directory", []):
+                    locations = []
+                    for loc in directory.get("Location", []):
+                        if "path" in loc:
+                            locations.append(loc["path"])
+                    
+                    sections.append({
+                        "key": directory.get("key"),
+                        "title": directory.get("title"),
+                        "type": directory.get("type"),
+                        "locations": locations,
+                    })
+                return sections
+                
+        except Exception as e:
+            logger.error(f"Plex: Error getting library sections: {e}")
+            return []
+    
+    async def refresh_section_path(self, section_key: str, path: str) -> bool:
+        """
+        Trigger a partial scan of a specific path within a library section.
+        
+        This tells Plex to rescan just that path, picking up new/changed files.
+        
+        Args:
+            section_key: The library section key.
+            path: The file or folder path to refresh.
+            
+        Returns:
+            True if refresh was initiated successfully.
+        """
+        if not self.is_configured:
+            return False
+        
+        # URL encode the path for the query parameter
+        from urllib.parse import quote
+        url = f"{self.server}/library/sections/{section_key}/refresh"
+        params = {"path": path}
+        
+        try:
+            session = await self._get_session()
+            async with session.get(url, params=params) as response:
+                if response.status == 200:
+                    logger.info(f"Plex: Partial scan triggered for section {section_key}, path: {path}")
+                    return True
+                else:
+                    logger.warning(f"Plex: Partial scan failed (HTTP {response.status})")
+                    return False
+        except Exception as e:
+            logger.error(f"Plex: Error triggering partial scan: {e}")
+            return False
+
     async def refresh_by_file_path(self, file_path: str) -> bool:
         """
-        Find an item by file path and refresh its metadata.
+        Refresh a specific file path in Plex by triggering a partial library scan.
         
-        This is useful when we don't have the item ID (e.g., UI batch jobs).
+        This finds which library section contains the file and triggers a 
+        partial scan of that path, which is more reliable than search-based lookup.
         
         Args:
             file_path: Path to the media file.
             
         Returns:
-            True if item was found and refresh initiated.
+            True if refresh was initiated successfully.
         """
         if not self.is_configured:
             return False
         
-        # Search for the file in Plex libraries
-        # Plex's search doesn't support file path directly, but we can
-        # search for the filename and then verify the path
         from pathlib import Path
-        filename = Path(file_path).stem
         
-        search_url = f"{self.server}/hubs/search"
-        params = {
-            "query": filename,
-            "includeCollections": "0",
-            "sectionId": "",  # Search all libraries
-        }
+        logger.info(f"Plex: Looking for library containing: {file_path}")
         
-        try:
-            session = await self._get_session()
-            async with session.get(search_url, headers={"Accept": "application/json"}, params=params) as response:
-                if response.status != 200:
-                    logger.warning(f"Plex search failed: HTTP {response.status}")
-                    return False
-                
-                data = await response.json()
-                hubs = data.get("MediaContainer", {}).get("Hub", [])
-                
-                for hub in hubs:
-                    for metadata in hub.get("Metadata", []):
-                        # Check if this is a video type
-                        if metadata.get("type") not in ("episode", "movie"):
-                            continue
-                        
-                        rating_key = metadata.get("ratingKey")
-                        if not rating_key:
-                            continue
-                        
-                        # Verify the file path matches
-                        item_path = await self.get_file_path(rating_key)
-                        if item_path and item_path == file_path:
-                            logger.info(f"Found Plex item {rating_key} for {filename}")
-                            return await self.refresh_metadata(rating_key)
-                
-                logger.debug(f"No Plex item found for: {file_path}")
-                return False
-                
-        except Exception as e:
-            logger.error(f"Plex search error: {e}")
-            return False
+        # Get all library sections and find which one contains this path
+        sections = await self.get_library_sections()
+        
+        for section in sections:
+            for location in section.get("locations", []):
+                # Check if the file path starts with this library location
+                if file_path.startswith(location):
+                    logger.info(f"Plex: File is in library '{section['title']}' (section {section['key']})")
+                    
+                    # Trigger partial scan for the parent directory of the file
+                    # This ensures Plex picks up the new subtitle file
+                    parent_dir = str(Path(file_path).parent)
+                    return await self.refresh_section_path(section["key"], parent_dir)
+        
+        logger.info(f"Plex: No library found containing path: {file_path}")
+        return False
 
 
 class JellyfinClient:
@@ -256,13 +305,15 @@ class JellyfinClient:
                 # Jellyfin returns 204 No Content on success
                 if response.status in (200, 204):
                     server_name = "Emby" if self.is_emby else "Jellyfin"
-                    logger.info(f"{server_name} metadata refresh queued for item {item_id}")
+                    logger.info(f"{server_name}: Metadata refresh sent for item {item_id}")
                     return True
                 else:
-                    logger.warning(f"Jellyfin/Emby refresh failed: HTTP {response.status}")
+                    server_name = "Emby" if self.is_emby else "Jellyfin"
+                    logger.warning(f"{server_name}: Metadata refresh failed (HTTP {response.status}) for item {item_id}")
                     return False
         except aiohttp.ClientError as e:
-            logger.error(f"Jellyfin/Emby refresh error: {e}")
+            server_name = "Emby" if self.is_emby else "Jellyfin"
+            logger.error(f"{server_name}: Metadata refresh error: {e}")
             return False
     
     async def get_file_path(self, item_id: str) -> Optional[str]:
@@ -408,13 +459,15 @@ async def refresh_by_file_path(file_path: str) -> dict:
     settings = get_settings()
     results = {}
     
+    logger.info(f"Attempting media server refresh for: {file_path}")
+    
     # Try Plex
     if settings.plex.is_configured:
         plex = PlexClient()
         try:
             results["plex"] = await plex.refresh_by_file_path(file_path)
         except Exception as e:
-            logger.warning(f"Plex refresh by path failed: {e}")
+            logger.warning(f"Plex: Refresh by path failed: {e}")
             results["plex"] = False
         finally:
             await plex.close()
@@ -425,7 +478,7 @@ async def refresh_by_file_path(file_path: str) -> dict:
         try:
             results["jellyfin"] = await jellyfin.refresh_by_file_path(file_path)
         except Exception as e:
-            logger.warning(f"Jellyfin refresh by path failed: {e}")
+            logger.warning(f"Jellyfin: Refresh by path failed: {e}")
             results["jellyfin"] = False
         finally:
             await jellyfin.close()
@@ -436,7 +489,7 @@ async def refresh_by_file_path(file_path: str) -> dict:
         try:
             results["emby"] = await emby.refresh_by_file_path(file_path)
         except Exception as e:
-            logger.warning(f"Emby refresh by path failed: {e}")
+            logger.warning(f"Emby: Refresh by path failed: {e}")
             results["emby"] = False
         finally:
             await emby.close()

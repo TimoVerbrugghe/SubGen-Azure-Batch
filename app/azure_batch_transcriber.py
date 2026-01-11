@@ -451,6 +451,12 @@ class AzureBatchTranscriber:
         
         Args:
             job_id: The transcription job ID.
+            
+        Note:
+            Azure doesn't support cancelling running transcription jobs.
+            If the job is still running, Azure will return a 400 error with 
+            "DeleteNotAllowed". This is expected when cancelling and should
+            be handled gracefully by the caller.
         """
         session = await self._get_session()
         url = f"{self.api_base_url}/transcriptions/{job_id}"
@@ -458,7 +464,11 @@ class AzureBatchTranscriber:
         async with session.delete(url, headers=self.headers) as response:
             if response.status not in (200, 204):
                 error_text = await response.text()
-                logger.warning(f"Failed to delete transcription {job_id}: {response.status} - {error_text}")
+                # Check if this is the expected "can't delete running job" error
+                if "DeleteNotAllowed" in error_text or "hasn't finished yet" in error_text:
+                    logger.info(f"Transcription {job_id} still running on Azure (will complete/expire automatically)")
+                else:
+                    logger.warning(f"Failed to delete transcription {job_id}: {response.status} - {error_text}")
             else:
                 logger.info(f"Deleted transcription job: {job_id}")
     

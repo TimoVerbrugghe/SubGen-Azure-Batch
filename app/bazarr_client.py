@@ -106,11 +106,11 @@ class BazarrClient:
                 params = {"seriesid": series_id, "action": "scan-disk"}
                 async with session.patch(url, headers=self.headers, params=params) as response:
                     if response.status == 204 or response.status == 200:
-                        logger.info(f"Triggered Bazarr series disk scan for series {series_id}")
+                        logger.debug(f"Bazarr: Disk scan triggered for series {series_id}")
                         return True
                     else:
                         text = await response.text()
-                        logger.warning(f"Bazarr series scan failed: {response.status} - {text}")
+                        logger.warning(f"Bazarr: Series scan failed (HTTP {response.status}): {text}")
                         return False
             else:
                 # Trigger full series subtitle indexing task
@@ -118,10 +118,10 @@ class BazarrClient:
                 params = {"taskid": "update_series"}
                 async with session.post(url, headers=self.headers, params=params) as response:
                     if response.status == 204 or response.status == 200:
-                        logger.info("Triggered Bazarr full series update task")
+                        logger.info("Bazarr: Full series update task triggered")
                         return True
                     else:
-                        logger.warning(f"Bazarr series update task failed: {response.status}")
+                        logger.warning(f"Bazarr: Series update task failed (HTTP {response.status})")
                         return False
                     
         except Exception as e:
@@ -154,11 +154,11 @@ class BazarrClient:
                 params = {"radarrid": movie_id, "action": "scan-disk"}
                 async with session.patch(url, headers=self.headers, params=params) as response:
                     if response.status == 204 or response.status == 200:
-                        logger.info(f"Triggered Bazarr movie disk scan for movie {movie_id}")
+                        logger.debug(f"Bazarr: Disk scan triggered for movie {movie_id}")
                         return True
                     else:
                         text = await response.text()
-                        logger.warning(f"Bazarr movie scan failed: {response.status} - {text}")
+                        logger.warning(f"Bazarr: Movie scan failed (HTTP {response.status}): {text}")
                         return False
             else:
                 # Trigger full movie subtitle indexing task
@@ -166,10 +166,10 @@ class BazarrClient:
                 params = {"taskid": "update_movies"}
                 async with session.post(url, headers=self.headers, params=params) as response:
                     if response.status == 204 or response.status == 200:
-                        logger.info("Triggered Bazarr full movie update task")
+                        logger.info("Bazarr: Full movie update task triggered")
                         return True
                     else:
-                        logger.warning(f"Bazarr movie update task failed: {response.status}")
+                        logger.warning(f"Bazarr: Movie update task failed (HTTP {response.status})")
                         return False
                     
         except Exception as e:
