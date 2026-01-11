@@ -126,7 +126,7 @@ Hello world
         """Test validating empty content."""
         is_valid, error = validate_srt("")
         assert is_valid is False
-        assert "Empty" in error
+        assert error is not None and "Empty" in error
     
     def test_invalid_timing(self):
         """Test validating SRT with end before start."""

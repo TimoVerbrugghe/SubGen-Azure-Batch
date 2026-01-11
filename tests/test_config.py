@@ -59,7 +59,7 @@ class TestGetList:
         from app.config import get_list
         
         assert get_list('') == []
-        assert get_list(None) == []
+        assert get_list(None) == []  # type: ignore[arg-type]
     
     def test_custom_separator(self):
         """Test parsing with custom separator."""

@@ -285,6 +285,7 @@ class TestShouldSkipFile:
         
         result = await should_skip_file("/nonexistent/file.mkv", "en")
         assert result.should_skip is True
+        assert result.reason is not None
         assert "not found" in result.reason.lower() or "not exist" in result.reason.lower()
     
     @pytest.mark.asyncio

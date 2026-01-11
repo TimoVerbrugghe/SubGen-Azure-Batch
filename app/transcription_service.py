@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple, Union
 
 from app.audio_extractor import extract_audio, make_temp_dir
 from app.azure_batch_transcriber import (AzureBatchTranscriber,
@@ -416,7 +416,7 @@ class TranscriptionService:
         job_id: Optional[str] = None,
         save_srt: bool = True,
         refresh_media_servers: bool = True,
-    ) -> Tuple[TranscriptionResult, TranscriptionJob]:
+    ) -> Tuple[Optional[TranscriptionResult], TranscriptionJob]:
         """
         Transcribe a video/audio file - used by batch UI.
         

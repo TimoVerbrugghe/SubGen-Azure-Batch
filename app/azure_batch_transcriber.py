@@ -206,12 +206,19 @@ class AzureBatchTranscriber:
         
         logger.info(f"Uploaded audio to blob: {blob_name}")
         
+        # Get account name and key for SAS generation
+        account_name = blob_service_client.account_name
+        account_key = blob_service_client.credential.account_key if blob_service_client.credential else None
+        
+        if not account_name or not account_key:
+            raise ValueError("Could not retrieve storage account credentials for SAS generation")
+        
         # Generate SAS token (valid for 24 hours)
         sas_token = generate_blob_sas(
-            account_name=blob_service_client.account_name,
+            account_name=account_name,
             container_name=self.storage_container,
             blob_name=blob_name,
-            account_key=blob_service_client.credential.account_key,
+            account_key=account_key,
             permission=BlobSasPermissions(read=True),
             expiry=datetime.now(timezone.utc) + timedelta(hours=24)
         )

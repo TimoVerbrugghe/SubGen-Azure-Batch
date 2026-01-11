@@ -69,13 +69,12 @@ class NotificationService:
     """
     
     _instance: Optional["NotificationService"] = None
-    _config: Optional[NotificationConfig] = None
     
     PUSHOVER_API_URL = "https://api.pushover.net/1/messages.json"
     
     def __init__(self, config: NotificationConfig):
         """Initialize with configuration."""
-        self._config = config
+        self._config: NotificationConfig = config
         self._session: Optional[aiohttp.ClientSession] = None
     
     @classmethod
