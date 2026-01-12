@@ -36,20 +36,22 @@ SubGen-Azure-Batch is a cloud-based automatic subtitle generation service that u
 │   ├── main.py                     # FastAPI application entry point
 │   ├── config.py                   # Environment variables + helper utilities
 │   ├── transcription_service.py    # Unified transcription orchestration (all sources)
-│   ├── azure_batch_transcriber.py  # Azure Batch Transcription API client
-│   ├── audio_extractor.py          # FFmpeg audio extraction utilities
-│   ├── subtitle_utils.py           # SRT file generation and manipulation
-│   ├── bazarr_client.py            # Bazarr API integration
-│   ├── media_server_client.py      # Plex/Jellyfin/Emby API clients
-│   ├── skip_checker.py             # Skip logic for existing subtitles, internal subs, audio language
-│   ├── notification_service.py     # Failure notifications (Pushover)
-│   ├── language_code.py            # ISO 639 language code definitions
 │   ├── routers/
 │   │   ├── __init__.py
 │   │   ├── webhooks.py             # Plex, Jellyfin, Emby, Tautulli endpoints
 │   │   ├── asr.py                  # Bazarr-compatible whisper endpoint
 │   │   ├── batch.py                # Batch transcription endpoints
 │   │   └── ui.py                   # Web UI routes
+│   ├── utils/                      # Utility modules (imported by TranscriptionService)
+│   │   ├── __init__.py             # Re-exports all utilities for convenience
+│   │   ├── audio_extractor.py      # FFmpeg audio extraction utilities
+│   │   ├── azure_batch_transcriber.py  # Azure Batch Transcription API client
+│   │   ├── bazarr_client.py        # Bazarr API integration
+│   │   ├── language_code.py        # ISO 639 language code definitions
+│   │   ├── media_server_client.py  # Plex/Jellyfin/Emby API clients
+│   │   ├── notification_service.py # Failure notifications (Pushover)
+│   │   ├── skip_checker.py         # Skip logic for existing subtitles
+│   │   └── subtitle_utils.py       # SRT/LRC file generation and manipulation
 │   ├── static/
 │   │   ├── css/
 │   │   │   └── style.css
@@ -64,16 +66,11 @@ SubGen-Azure-Batch is a cloud-based automatic subtitle generation service that u
 │   ├── __init__.py
 │   ├── .env                        # Test environment variables (gitignored)
 │   ├── conftest.py                 # Pytest fixtures
-│   ├── test_azure_batch.py         # Azure Batch API tests
-│   ├── test_routers.py             # Router endpoint tests
-│   └── test_subtitle_utils.py      # Subtitle utility tests
+│   ├── test_*.py                   # Unit tests for each module
 ├── requirements.txt                # Python dependencies
 ├── Dockerfile                      # Lightweight Docker image (no CUDA)
 ├── docker-compose.yml              # Docker Compose for SubGen-Azure-Batch
 ├── .env.example                    # Environment variable template
-├── icon-black.png                  # Logo (dark version)
-├── icon-white.png                  # Logo (light version)
-├── icon.png                        # Original SubGen logo
 ├── LICENSE                         # MIT License
 ├── README.md                       # Main documentation
 └── CLAUDE.md                       # This file - AI assistant context
@@ -85,13 +82,22 @@ SubGen-Azure-Batch is a cloud-based automatic subtitle generation service that u
 
 Each module has a clear, single responsibility to maintain clean architecture and avoid code duplication:
 
+### Core Modules (app/)
+
 | Module | Responsibility | Key Functions |
 | ------ | -------------- | ------------- |
 | `config.py` | Environment variables + helper utilities | `require_azure_configured()`, `format_duration()`, `SkipConfig` |
 | `transcription_service.py` | Unified transcription orchestration | Session/job management for UI and Bazarr sources |
+
+### Utility Modules (app/utils/)
+
+All utility modules are in `app/utils/` and can be imported via `from app.utils import ...`:
+
+| Module | Responsibility | Key Functions |
+| ------ | -------------- | ------------- |
 | `azure_batch_transcriber.py` | Azure Speech API client | `create_transcription()`, `wait_for_completion()`, `to_srt()` |
 | `audio_extractor.py` | FFmpeg audio extraction | `extract_audio()` - video to OGG/Opus conversion |
-| `subtitle_utils.py` | SRT file utilities | `seconds_to_srt_time()`, `get_srt_path()`, `generate_srt()` |
+| `subtitle_utils.py` | SRT/LRC file utilities | `seconds_to_srt_time()`, `get_srt_path()`, `save_srt()`, `save_lrc()` |
 | `bazarr_client.py` | Bazarr API integration | `trigger_series_scan()`, `trigger_movie_scan()`, `notify_bazarr_of_new_subtitle()` |
 | `media_server_client.py` | Plex/Jellyfin/Emby API clients | `refresh_metadata()`, `refresh_by_file_path()` |
 | `skip_checker.py` | Skip logic for subtitle generation | `should_skip_file()`, `get_stream_info()` via ffprobe |
@@ -120,21 +126,27 @@ Each module has a clear, single responsibility to maintain clean architecture an
 
 4. **Session Source Tracking**: Jobs are tagged with their source (`Bazarr` or `Batch`) for UI visibility with color-coded badges
 
-5. **Skip Checker (skip_checker.py)**: Uses FFprobe (not pyav) for stream inspection:
+5. **Global Concurrency Limit with Priority Queue**: The `CONCURRENT_TRANSCRIPTIONS` limit is enforced globally:
+   - All transcription jobs share a global semaphore regardless of source
+   - Bazarr requests get priority and jump ahead of queued batch jobs
+   - This ensures Bazarr users don't have to wait for large batch jobs to complete
+   - Implemented in `TranscriptionService.acquire_transcription_slot(priority=True/False)`
+
+6. **Skip Checker (skip_checker.py)**: Uses FFprobe (not pyav) for stream inspection:
    - `should_skip_file()` - Async function checking all skip conditions
    - `get_stream_info()` - FFprobe-based audio/subtitle stream extraction
    - `SkipConfig` in config.py - Centralized skip configuration via env vars
 
-6. **Subtitle Naming (SubtitleNamingConfig)**: Controls filename language format:
+7. **Subtitle Naming (SubtitleNamingConfig)**: Controls filename language format:
    - `SUBTITLE_LANGUAGE_NAMING_TYPE` - Format type: ISO_639_1, ISO_639_2_T, ISO_639_2_B, NAME, NATIVE
    - `SHOW_SUBGEN_MARKER` - Include `.subgen` in filename for identification
 
-7. **Media Server Refresh**: After subtitle creation, triggers metadata refresh:
+8. **Media Server Refresh**: After subtitle creation, triggers metadata refresh:
    - **Webhooks**: Item IDs passed to background task, refresh triggered AFTER transcription completes
    - **UI Batch**: Uses `refresh_by_file_path()` to search and refresh (no item ID available)
    - **Bazarr ASR**: No refresh (Bazarr handles its own media library updates)
 
-8. **Bazarr Notifications**: Triggers Bazarr disk scan after subtitle generation:
+9. **Bazarr Notifications**: Triggers Bazarr disk scan after subtitle generation:
    - Uses `PATCH /api/series?seriesid=X&action=scan-disk` for TV shows
    - Uses `PATCH /api/movies?radarrid=X&action=scan-disk` for movies
    - Smart path-based lookup to find Sonarr/Radarr IDs from file paths
@@ -161,7 +173,7 @@ Each module has a clear, single responsibility to maintain clean architecture an
 | `JELLYFIN_SERVER` | `` | Jellyfin server URL |
 | `EMBY_TOKEN` | `` | Emby authentication token |
 | `EMBY_SERVER` | `` | Emby server URL |
-| `CONCURRENT_TRANSCRIPTIONS` | `50` | Maximum concurrent Azure batch jobs |
+| `CONCURRENT_TRANSCRIPTIONS` | `50` | Global maximum concurrent transcription jobs (enforced across all sessions) |
 | `TRANSCODE_DIR` | `` | Directory for temp audio files (mount a volume to reduce memory usage) |
 | `SKIP_IF_TARGET_SUBTITLES_EXIST` | `true` | Skip if target language subtitle exists |
 | `SKIP_IF_EXTERNAL_SUBTITLES_EXIST` | `false` | Skip if any external subtitle exists |

@@ -20,11 +20,11 @@ from enum import Enum
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple, Union
 
-from app.audio_extractor import extract_audio, make_temp_dir
-from app.azure_batch_transcriber import (AzureBatchTranscriber,
-                                         TranscriptionResult)
 from app.config import format_duration, get_settings
-from app.language_code import LanguageCode
+from app.utils.audio_extractor import extract_audio, make_temp_dir
+from app.utils.azure_batch_transcriber import (AzureBatchTranscriber,
+                                               TranscriptionResult)
+from app.utils.language_code import LanguageCode
 
 logger = logging.getLogger(__name__)
 
@@ -152,6 +152,87 @@ class TranscriptionService:
     _sessions: Dict[str, TranscriptionSession] = {}
     _lock = asyncio.Lock()
     
+    # Limit concurrent blob uploads to prevent network saturation
+    # When many jobs run in parallel, they can all reach upload phase together
+    # This prevents connection timeouts from too many simultaneous uploads
+    _upload_semaphore: Optional[asyncio.Semaphore] = None
+    _MAX_CONCURRENT_UPLOADS = 3  # Limit parallel blob uploads
+    
+    # Global transcription concurrency limit (enforced across all sessions)
+    # This ensures we don't exceed Azure API limits regardless of how many
+    # batch sessions or Bazarr requests are running
+    _transcription_semaphore: Optional[asyncio.Semaphore] = None
+    _transcription_lock = asyncio.Lock()  # Lock for priority queue operations
+    _priority_waiters: List[asyncio.Event] = []  # High-priority (Bazarr) waiters
+    _normal_waiters: List[asyncio.Event] = []  # Normal priority (UI batch) waiters
+    
+    @classmethod
+    def _get_upload_semaphore(cls) -> asyncio.Semaphore:
+        """Get or create the upload semaphore (lazily initialized for event loop)."""
+        if cls._upload_semaphore is None:
+            cls._upload_semaphore = asyncio.Semaphore(cls._MAX_CONCURRENT_UPLOADS)
+        return cls._upload_semaphore
+    
+    @classmethod
+    def _get_transcription_semaphore(cls) -> asyncio.Semaphore:
+        """Get or create the global transcription semaphore."""
+        if cls._transcription_semaphore is None:
+            settings = get_settings()
+            cls._transcription_semaphore = asyncio.Semaphore(settings.concurrent_transcriptions)
+            logger.info(f"Initialized global transcription semaphore with limit {settings.concurrent_transcriptions}")
+        return cls._transcription_semaphore
+    
+    @classmethod
+    async def acquire_transcription_slot(cls, priority: bool = False) -> None:
+        """
+        Acquire a transcription slot with optional priority.
+        
+        Bazarr requests use priority=True to jump ahead of queued batch jobs.
+        This ensures Bazarr users don't have to wait for large batch jobs.
+        
+        Args:
+            priority: If True, this request gets priority over normal waiters.
+        """
+        semaphore = cls._get_transcription_semaphore()
+        
+        # Try to acquire immediately
+        if semaphore.locked():
+            # Semaphore is at capacity, need to wait in queue
+            my_event = asyncio.Event()
+            
+            async with cls._transcription_lock:
+                if priority:
+                    cls._priority_waiters.append(my_event)
+                    queue_pos = len(cls._priority_waiters)
+                    logger.debug(f"Priority request queued at position {queue_pos}")
+                else:
+                    cls._normal_waiters.append(my_event)
+                    queue_pos = len(cls._priority_waiters) + len(cls._normal_waiters)
+                    logger.debug(f"Normal request queued at position {queue_pos} ({len(cls._priority_waiters)} priority ahead)")
+            
+            # Wait for our turn
+            await my_event.wait()
+        
+        # Acquire the semaphore
+        await semaphore.acquire()
+    
+    @classmethod
+    async def release_transcription_slot(cls) -> None:
+        """Release a transcription slot and notify next waiter."""
+        semaphore = cls._get_transcription_semaphore()
+        semaphore.release()
+        
+        # Notify the next waiter (priority first)
+        async with cls._transcription_lock:
+            if cls._priority_waiters:
+                next_waiter = cls._priority_waiters.pop(0)
+                next_waiter.set()
+                logger.debug(f"Notified priority waiter, {len(cls._priority_waiters)} priority + {len(cls._normal_waiters)} normal remaining")
+            elif cls._normal_waiters:
+                next_waiter = cls._normal_waiters.pop(0)
+                next_waiter.set()
+                logger.debug(f"Notified normal waiter, {len(cls._normal_waiters)} remaining")
+    
     @classmethod
     def get_all_sessions(cls) -> Dict[str, TranscriptionSession]:
         """Get all active sessions."""
@@ -246,7 +327,7 @@ class TranscriptionService:
                 logger.error(f"[{job_id}] Failed: {job.file_path} - {job.error}")
                 
                 # Send failure notification (fire-and-forget, non-blocking)
-                from app.notification_service import notify_failure
+                from app.utils.notification_service import notify_failure
                 asyncio.create_task(
                     notify_failure(
                         file_path=job.file_path,
@@ -303,6 +384,14 @@ class TranscriptionService:
         # Create session and job for tracking
         session = await cls.create_session(source=source, notify_bazarr=False)
         job = await cls.add_job(session.id, file_name, language, source)
+        
+        # Bazarr requests get priority in the global transcription queue
+        # This ensures users don't have to wait for large batch jobs
+        is_priority = source == JobSource.BAZARR
+        if is_priority:
+            logger.debug(f"[{job.id}] Bazarr request - acquiring priority transcription slot")
+        
+        await cls.acquire_transcription_slot(priority=is_priority)
         
         try:
             # Update status
@@ -399,6 +488,9 @@ class TranscriptionService:
             raise
             
         finally:
+            # Release global transcription slot
+            await cls.release_transcription_slot()
+            
             # Cleanup temp files
             try:
                 import shutil
@@ -415,7 +507,6 @@ class TranscriptionService:
         session_id: Optional[str] = None,
         job_id: Optional[str] = None,
         save_srt: bool = True,
-        refresh_media_servers: bool = True,
     ) -> Tuple[Optional[TranscriptionResult], TranscriptionJob]:
         """
         Transcribe a video/audio file - used by batch UI.
@@ -427,10 +518,13 @@ class TranscriptionService:
             session_id: Optional existing session ID.
             job_id: Optional existing job ID (if already added to session).
             save_srt: Whether to save SRT file next to video.
-            refresh_media_servers: Whether to refresh metadata on configured media servers.
             
         Returns:
             Tuple of (TranscriptionResult, TranscriptionJob).
+        
+        Note:
+            Media server refresh is handled by the batch router at session end,
+            not per-job, to avoid spamming the media servers.
         """
         settings = get_settings()
         
@@ -467,13 +561,20 @@ class TranscriptionService:
                 raise TranscriptionCancelledError("Cancelled before upload")
             
             # Upload and transcribe
+            # Use upload semaphore to limit concurrent blob uploads and prevent network saturation
             await cls.update_job_status(session.id, job.id, JobStatus.UPLOADING)
             
             transcriber = AzureBatchTranscriber()
             try:
-                audio_url, blob_name = await transcriber.upload_audio(audio_path)
+                upload_semaphore = cls._get_upload_semaphore()
+                # Log if we need to wait for upload slot
+                if upload_semaphore.locked():
+                    logger.debug(f"[{job.id}] Waiting for upload slot (max {cls._MAX_CONCURRENT_UPLOADS} concurrent)")
+                
+                async with upload_semaphore:
+                    audio_url, blob_name = await transcriber.upload_audio(audio_path)
                 job.blob_name = blob_name
-                logger.info(f"[{job.id}] Uploaded: {blob_name}")
+                logger.info(f"[Session {session.id}] [{job.id}] Uploaded to Azure: {blob_name}")
                 
                 # Check if cancelled before starting transcription
                 if job.status == JobStatus.CANCELLED:
@@ -499,16 +600,17 @@ class TranscriptionService:
                 
                 # Append credit line if configured (APPEND)
                 if settings.transcription.append_credit_line:
-                    from app.subtitle_utils import append_credit_line
+                    from app.utils.subtitle_utils import append_credit_line
                     srt_content = append_credit_line(srt_content)
                     logger.debug(f"[{job.id}] Appended credit line")
                 
                 # Save subtitle file if requested
                 output_path = None
                 if save_srt:
-                    from app.audio_extractor import is_audio_file
-                    from app.subtitle_utils import save_lrc
-                    from app.subtitle_utils import save_srt as save_srt_file
+                    from app.utils.audio_extractor import is_audio_file
+                    from app.utils.subtitle_utils import save_lrc
+                    from app.utils.subtitle_utils import \
+                        save_srt as save_srt_file
 
                     # Check if this is an audio file and LRC is enabled
                     if is_audio_file(file_path) and settings.transcription.lrc_for_audio_files:
@@ -520,23 +622,10 @@ class TranscriptionService:
                     
                     job.srt_path = output_path
                 
-                # Refresh media servers so they pick up the new subtitle
-                refresh_results = {}
-                if refresh_media_servers and output_path:
-                    from app.media_server_client import refresh_by_file_path
-                    try:
-                        refresh_results = await refresh_by_file_path(file_path)
-                        refreshed = [k for k, v in refresh_results.items() if v]
-                        if refreshed:
-                            logger.info(f"[Session {session.id}] [{job.id}] Refreshed metadata on: {', '.join(refreshed)}")
-                    except Exception as e:
-                        logger.warning(f"[Session {session.id}] [{job.id}] Media server refresh failed: {e}")
-                
                 await cls.update_job_status(
                     session.id, job.id, JobStatus.COMPLETED,
                     segments_count=len(result.segments),
                     srt_path=output_path,
-                    media_refresh_status=refresh_results if refresh_results else None,
                 )
                 
                 # Cleanup Azure job

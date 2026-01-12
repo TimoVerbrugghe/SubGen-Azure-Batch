@@ -18,9 +18,9 @@ class TestPlexClient:
     
     def test_client_initialization(self, mock_settings):
         """Test Plex client initializes correctly."""
-        from app.media_server_client import PlexClient
+        from app.utils.media_server_client import PlexClient
         
-        with patch('app.media_server_client.get_settings', return_value=mock_settings):
+        with patch('app.utils.media_server_client.get_settings', return_value=mock_settings):
             client = PlexClient()
             
             assert client.server == mock_settings.plex.server
@@ -28,9 +28,9 @@ class TestPlexClient:
     
     def test_client_with_custom_params(self, mock_settings):
         """Test Plex client with custom parameters."""
-        from app.media_server_client import PlexClient
+        from app.utils.media_server_client import PlexClient
         
-        with patch('app.media_server_client.get_settings', return_value=mock_settings):
+        with patch('app.utils.media_server_client.get_settings', return_value=mock_settings):
             client = PlexClient(
                 server="http://custom:32400",
                 token="custom-token"
@@ -41,32 +41,32 @@ class TestPlexClient:
     
     def test_is_configured_when_both_set(self, mock_settings):
         """Test is_configured returns True when server and token are set."""
-        from app.media_server_client import PlexClient
+        from app.utils.media_server_client import PlexClient
         
-        with patch('app.media_server_client.get_settings', return_value=mock_settings):
+        with patch('app.utils.media_server_client.get_settings', return_value=mock_settings):
             client = PlexClient()
             assert client.is_configured is True
     
     def test_is_configured_when_missing(self, mock_settings):
         """Test is_configured returns False when config is missing."""
-        from app.media_server_client import PlexClient
+        from app.utils.media_server_client import PlexClient
         
         mock_settings.plex.server = ""
         mock_settings.plex.token = ""
         
-        with patch('app.media_server_client.get_settings', return_value=mock_settings):
+        with patch('app.utils.media_server_client.get_settings', return_value=mock_settings):
             client = PlexClient()
             assert client.is_configured is False
     
     @pytest.mark.asyncio
     async def test_refresh_metadata_not_configured(self, mock_settings):
         """Test refresh_metadata returns False when not configured."""
-        from app.media_server_client import PlexClient
+        from app.utils.media_server_client import PlexClient
         
         mock_settings.plex.server = ""
         mock_settings.plex.token = ""
         
-        with patch('app.media_server_client.get_settings', return_value=mock_settings):
+        with patch('app.utils.media_server_client.get_settings', return_value=mock_settings):
             client = PlexClient()
             result = await client.refresh_metadata("12345")
             assert result is False
@@ -74,7 +74,7 @@ class TestPlexClient:
     @pytest.mark.asyncio
     async def test_refresh_metadata_success(self, mock_settings, mock_aiohttp_session):
         """Test successful metadata refresh."""
-        from app.media_server_client import PlexClient
+        from app.utils.media_server_client import PlexClient
 
         # Configure mock response
         mock_response = AsyncMock()
@@ -83,7 +83,7 @@ class TestPlexClient:
         mock_response.__aexit__ = AsyncMock(return_value=None)
         mock_aiohttp_session.put = MagicMock(return_value=mock_response)
         
-        with patch('app.media_server_client.get_settings', return_value=mock_settings):
+        with patch('app.utils.media_server_client.get_settings', return_value=mock_settings):
             client = PlexClient()
             client._session = mock_aiohttp_session
             
@@ -93,9 +93,9 @@ class TestPlexClient:
     @pytest.mark.asyncio
     async def test_close_session(self, mock_settings, mock_aiohttp_session):
         """Test closing the client session."""
-        from app.media_server_client import PlexClient
+        from app.utils.media_server_client import PlexClient
         
-        with patch('app.media_server_client.get_settings', return_value=mock_settings):
+        with patch('app.utils.media_server_client.get_settings', return_value=mock_settings):
             client = PlexClient()
             client._session = mock_aiohttp_session
             
@@ -108,9 +108,9 @@ class TestJellyfinClient:
     
     def test_client_initialization(self, mock_settings):
         """Test Jellyfin client initializes correctly."""
-        from app.media_server_client import JellyfinClient
+        from app.utils.media_server_client import JellyfinClient
         
-        with patch('app.media_server_client.get_settings', return_value=mock_settings):
+        with patch('app.utils.media_server_client.get_settings', return_value=mock_settings):
             client = JellyfinClient()
             
             assert client.server == mock_settings.jellyfin.server
@@ -119,9 +119,9 @@ class TestJellyfinClient:
     
     def test_client_as_emby(self, mock_settings):
         """Test client initialization as Emby."""
-        from app.media_server_client import JellyfinClient
+        from app.utils.media_server_client import JellyfinClient
         
-        with patch('app.media_server_client.get_settings', return_value=mock_settings):
+        with patch('app.utils.media_server_client.get_settings', return_value=mock_settings):
             client = JellyfinClient(is_emby=True)
             
             assert client.server == mock_settings.emby.server
@@ -130,21 +130,21 @@ class TestJellyfinClient:
     
     def test_is_configured(self, mock_settings):
         """Test is_configured property."""
-        from app.media_server_client import JellyfinClient
+        from app.utils.media_server_client import JellyfinClient
         
-        with patch('app.media_server_client.get_settings', return_value=mock_settings):
+        with patch('app.utils.media_server_client.get_settings', return_value=mock_settings):
             client = JellyfinClient()
             assert client.is_configured is True
     
     @pytest.mark.asyncio
     async def test_refresh_metadata_not_configured(self, mock_settings):
         """Test refresh_metadata returns False when not configured."""
-        from app.media_server_client import JellyfinClient
+        from app.utils.media_server_client import JellyfinClient
         
         mock_settings.jellyfin.server = ""
         mock_settings.jellyfin.token = ""
         
-        with patch('app.media_server_client.get_settings', return_value=mock_settings):
+        with patch('app.utils.media_server_client.get_settings', return_value=mock_settings):
             client = JellyfinClient()
             result = await client.refresh_metadata("item-123")
             assert result is False
@@ -152,7 +152,7 @@ class TestJellyfinClient:
     @pytest.mark.asyncio
     async def test_refresh_metadata_success(self, mock_settings, mock_aiohttp_session):
         """Test successful metadata refresh."""
-        from app.media_server_client import JellyfinClient
+        from app.utils.media_server_client import JellyfinClient
 
         # Configure mock response
         mock_response = AsyncMock()
@@ -161,7 +161,7 @@ class TestJellyfinClient:
         mock_response.__aexit__ = AsyncMock(return_value=None)
         mock_aiohttp_session.post = MagicMock(return_value=mock_response)
         
-        with patch('app.media_server_client.get_settings', return_value=mock_settings):
+        with patch('app.utils.media_server_client.get_settings', return_value=mock_settings):
             client = JellyfinClient()
             client._session = mock_aiohttp_session
             
@@ -175,11 +175,11 @@ class TestRefreshAllConfiguredServers:
     @pytest.mark.asyncio
     async def test_refresh_with_all_servers(self, mock_settings):
         """Test refreshing all configured servers."""
-        from app.media_server_client import refresh_all_configured_servers
+        from app.utils.media_server_client import refresh_all_configured_servers
         
-        with patch('app.media_server_client.get_settings', return_value=mock_settings):
-            with patch('app.media_server_client.PlexClient') as MockPlex:
-                with patch('app.media_server_client.JellyfinClient') as MockJellyfin:
+        with patch('app.utils.media_server_client.get_settings', return_value=mock_settings):
+            with patch('app.utils.media_server_client.PlexClient') as MockPlex:
+                with patch('app.utils.media_server_client.JellyfinClient') as MockJellyfin:
                     # Setup mock clients
                     mock_plex = AsyncMock()
                     mock_plex.refresh_metadata = AsyncMock(return_value=True)
@@ -202,9 +202,9 @@ class TestRefreshAllConfiguredServers:
     @pytest.mark.asyncio
     async def test_refresh_with_no_ids(self, mock_settings):
         """Test refresh returns empty dict with no item IDs."""
-        from app.media_server_client import refresh_all_configured_servers
+        from app.utils.media_server_client import refresh_all_configured_servers
         
-        with patch('app.media_server_client.get_settings', return_value=mock_settings):
+        with patch('app.utils.media_server_client.get_settings', return_value=mock_settings):
             results = await refresh_all_configured_servers()
             
             assert results == {}
@@ -216,12 +216,12 @@ class TestGetFilePath:
     @pytest.mark.asyncio
     async def test_plex_get_file_path_not_configured(self, mock_settings):
         """Test get_file_path returns None when not configured."""
-        from app.media_server_client import PlexClient
+        from app.utils.media_server_client import PlexClient
         
         mock_settings.plex.server = ""
         mock_settings.plex.token = ""
         
-        with patch('app.media_server_client.get_settings', return_value=mock_settings):
+        with patch('app.utils.media_server_client.get_settings', return_value=mock_settings):
             client = PlexClient()
             result = await client.get_file_path("12345")
             assert result is None
@@ -229,7 +229,7 @@ class TestGetFilePath:
     @pytest.mark.asyncio
     async def test_plex_get_file_path_success(self, mock_settings, mock_aiohttp_session):
         """Test successful file path retrieval from Plex."""
-        from app.media_server_client import PlexClient
+        from app.utils.media_server_client import PlexClient
 
         # Mock Plex API response
         mock_response_data = {
@@ -251,7 +251,7 @@ class TestGetFilePath:
         mock_response.__aexit__ = AsyncMock(return_value=None)
         mock_aiohttp_session.get = MagicMock(return_value=mock_response)
         
-        with patch('app.media_server_client.get_settings', return_value=mock_settings):
+        with patch('app.utils.media_server_client.get_settings', return_value=mock_settings):
             client = PlexClient()
             client._session = mock_aiohttp_session
             

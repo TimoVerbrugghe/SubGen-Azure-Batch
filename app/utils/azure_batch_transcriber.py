@@ -96,7 +96,7 @@ class TranscriptionResult:
     
     def to_srt(self) -> str:
         """Convert transcription to SRT format."""
-        from app.subtitle_utils import seconds_to_srt_time
+        from app.utils.subtitle_utils import seconds_to_srt_time
         
         srt_lines = []
         

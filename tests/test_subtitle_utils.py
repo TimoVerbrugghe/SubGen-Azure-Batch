@@ -19,7 +19,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app.subtitle_utils import (SUBTITLE_EXTENSIONS, SubtitleEntry,
+from app.utils.subtitle_utils import (SUBTITLE_EXTENSIONS, SubtitleEntry,
                                 add_subgen_marker, append_credit_line,
                                 entries_to_srt, find_existing_subtitles,
                                 format_language_for_filename, get_lrc_path,

@@ -15,11 +15,11 @@ import requests
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app.azure_batch_transcriber import (AzureBatchTranscriber,
+from app.utils.azure_batch_transcriber import (AzureBatchTranscriber,
                                          TranscriptionJob, TranscriptionResult,
                                          TranscriptionSegment,
                                          TranscriptionStatus)
-from app.subtitle_utils import parse_srt, validate_srt
+from app.utils.subtitle_utils import parse_srt, validate_srt
 
 
 class TestTranscriptionResultClass:

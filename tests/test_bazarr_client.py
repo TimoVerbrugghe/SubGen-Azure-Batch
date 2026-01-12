@@ -18,9 +18,9 @@ class TestBazarrClientInit:
     
     def test_client_initialization(self, mock_settings):
         """Test Bazarr client initializes correctly."""
-        from app.bazarr_client import BazarrClient
+        from app.utils.bazarr_client import BazarrClient
         
-        with patch('app.bazarr_client.get_settings', return_value=mock_settings):
+        with patch('app.utils.bazarr_client.get_settings', return_value=mock_settings):
             client = BazarrClient()
             
             assert client.url == mock_settings.bazarr.url
@@ -28,9 +28,9 @@ class TestBazarrClientInit:
     
     def test_client_with_custom_params(self, mock_settings):
         """Test client with custom URL and API key."""
-        from app.bazarr_client import BazarrClient
+        from app.utils.bazarr_client import BazarrClient
         
-        with patch('app.bazarr_client.get_settings', return_value=mock_settings):
+        with patch('app.utils.bazarr_client.get_settings', return_value=mock_settings):
             client = BazarrClient(
                 url="http://custom:6767",
                 api_key="custom-key"
@@ -41,11 +41,11 @@ class TestBazarrClientInit:
     
     def test_url_trailing_slash_stripped(self, mock_settings):
         """Test that trailing slashes are removed from URL."""
-        from app.bazarr_client import BazarrClient
+        from app.utils.bazarr_client import BazarrClient
         
         mock_settings.bazarr.url = "http://localhost:6767/"
         
-        with patch('app.bazarr_client.get_settings', return_value=mock_settings):
+        with patch('app.utils.bazarr_client.get_settings', return_value=mock_settings):
             client = BazarrClient()
             
             assert client.url == "http://localhost:6767"
@@ -56,29 +56,29 @@ class TestBazarrClientConfig:
     
     def test_is_configured_when_both_set(self, mock_settings):
         """Test is_configured returns True when URL and key are set."""
-        from app.bazarr_client import BazarrClient
+        from app.utils.bazarr_client import BazarrClient
         
-        with patch('app.bazarr_client.get_settings', return_value=mock_settings):
+        with patch('app.utils.bazarr_client.get_settings', return_value=mock_settings):
             client = BazarrClient()
             assert client.is_configured is True
     
     def test_is_configured_when_url_missing(self, mock_settings):
         """Test is_configured returns False when URL is missing."""
-        from app.bazarr_client import BazarrClient
+        from app.utils.bazarr_client import BazarrClient
         
         mock_settings.bazarr.url = ""
         
-        with patch('app.bazarr_client.get_settings', return_value=mock_settings):
+        with patch('app.utils.bazarr_client.get_settings', return_value=mock_settings):
             client = BazarrClient()
             assert client.is_configured is False
     
     def test_is_configured_when_key_missing(self, mock_settings):
         """Test is_configured returns False when API key is missing."""
-        from app.bazarr_client import BazarrClient
+        from app.utils.bazarr_client import BazarrClient
         
         mock_settings.bazarr.api_key = ""
         
-        with patch('app.bazarr_client.get_settings', return_value=mock_settings):
+        with patch('app.utils.bazarr_client.get_settings', return_value=mock_settings):
             client = BazarrClient()
             assert client.is_configured is False
 
@@ -88,9 +88,9 @@ class TestBazarrClientHeaders:
     
     def test_headers_include_api_key(self, mock_settings):
         """Test that headers include the API key."""
-        from app.bazarr_client import BazarrClient
+        from app.utils.bazarr_client import BazarrClient
         
-        with patch('app.bazarr_client.get_settings', return_value=mock_settings):
+        with patch('app.utils.bazarr_client.get_settings', return_value=mock_settings):
             client = BazarrClient()
             headers = client.headers
             
@@ -105,11 +105,11 @@ class TestBazarrClientConnection:
     @pytest.mark.asyncio
     async def test_test_connection_not_configured(self, mock_settings):
         """Test connection returns False when not configured."""
-        from app.bazarr_client import BazarrClient
+        from app.utils.bazarr_client import BazarrClient
         
         mock_settings.bazarr.url = ""
         
-        with patch('app.bazarr_client.get_settings', return_value=mock_settings):
+        with patch('app.utils.bazarr_client.get_settings', return_value=mock_settings):
             client = BazarrClient()
             result = await client.test_connection()
             assert result is False
@@ -117,7 +117,7 @@ class TestBazarrClientConnection:
     @pytest.mark.asyncio
     async def test_test_connection_success(self, mock_settings, mock_aiohttp_session):
         """Test successful connection test."""
-        from app.bazarr_client import BazarrClient
+        from app.utils.bazarr_client import BazarrClient
         
         mock_response = AsyncMock()
         mock_response.status = 200
@@ -125,7 +125,7 @@ class TestBazarrClientConnection:
         mock_response.__aexit__ = AsyncMock(return_value=None)
         mock_aiohttp_session.get = MagicMock(return_value=mock_response)
         
-        with patch('app.bazarr_client.get_settings', return_value=mock_settings):
+        with patch('app.utils.bazarr_client.get_settings', return_value=mock_settings):
             client = BazarrClient()
             client._session = mock_aiohttp_session
             
@@ -135,7 +135,7 @@ class TestBazarrClientConnection:
     @pytest.mark.asyncio
     async def test_test_connection_failure(self, mock_settings, mock_aiohttp_session):
         """Test connection failure returns False."""
-        from app.bazarr_client import BazarrClient
+        from app.utils.bazarr_client import BazarrClient
         
         mock_response = AsyncMock()
         mock_response.status = 401  # Unauthorized
@@ -143,7 +143,7 @@ class TestBazarrClientConnection:
         mock_response.__aexit__ = AsyncMock(return_value=None)
         mock_aiohttp_session.get = MagicMock(return_value=mock_response)
         
-        with patch('app.bazarr_client.get_settings', return_value=mock_settings):
+        with patch('app.utils.bazarr_client.get_settings', return_value=mock_settings):
             client = BazarrClient()
             client._session = mock_aiohttp_session
             
@@ -157,11 +157,11 @@ class TestBazarrClientSeriesScan:
     @pytest.mark.asyncio
     async def test_trigger_series_scan_not_configured(self, mock_settings):
         """Test series scan returns False when not configured."""
-        from app.bazarr_client import BazarrClient
+        from app.utils.bazarr_client import BazarrClient
         
         mock_settings.bazarr.url = ""
         
-        with patch('app.bazarr_client.get_settings', return_value=mock_settings):
+        with patch('app.utils.bazarr_client.get_settings', return_value=mock_settings):
             client = BazarrClient()
             result = await client.trigger_series_scan(series_id=123)
             assert result is False
@@ -169,7 +169,7 @@ class TestBazarrClientSeriesScan:
     @pytest.mark.asyncio
     async def test_trigger_series_scan_with_id(self, mock_settings, mock_aiohttp_session):
         """Test triggering series scan with specific ID."""
-        from app.bazarr_client import BazarrClient
+        from app.utils.bazarr_client import BazarrClient
         
         mock_response = AsyncMock()
         mock_response.status = 204
@@ -178,7 +178,7 @@ class TestBazarrClientSeriesScan:
         mock_response.__aexit__ = AsyncMock(return_value=None)
         mock_aiohttp_session.patch = MagicMock(return_value=mock_response)
         
-        with patch('app.bazarr_client.get_settings', return_value=mock_settings):
+        with patch('app.utils.bazarr_client.get_settings', return_value=mock_settings):
             client = BazarrClient()
             client._session = mock_aiohttp_session
             
@@ -189,7 +189,7 @@ class TestBazarrClientSeriesScan:
     @pytest.mark.asyncio
     async def test_trigger_series_scan_full_update(self, mock_settings, mock_aiohttp_session):
         """Test triggering full series update task."""
-        from app.bazarr_client import BazarrClient
+        from app.utils.bazarr_client import BazarrClient
         
         mock_response = AsyncMock()
         mock_response.status = 204
@@ -197,7 +197,7 @@ class TestBazarrClientSeriesScan:
         mock_response.__aexit__ = AsyncMock(return_value=None)
         mock_aiohttp_session.post = MagicMock(return_value=mock_response)
         
-        with patch('app.bazarr_client.get_settings', return_value=mock_settings):
+        with patch('app.utils.bazarr_client.get_settings', return_value=mock_settings):
             client = BazarrClient()
             client._session = mock_aiohttp_session
             
@@ -211,11 +211,11 @@ class TestBazarrClientMovieScan:
     @pytest.mark.asyncio
     async def test_trigger_movie_scan_not_configured(self, mock_settings):
         """Test movie scan returns False when not configured."""
-        from app.bazarr_client import BazarrClient
+        from app.utils.bazarr_client import BazarrClient
         
         mock_settings.bazarr.url = ""
         
-        with patch('app.bazarr_client.get_settings', return_value=mock_settings):
+        with patch('app.utils.bazarr_client.get_settings', return_value=mock_settings):
             client = BazarrClient()
             result = await client.trigger_movie_scan(movie_id=456)
             assert result is False
@@ -223,7 +223,7 @@ class TestBazarrClientMovieScan:
     @pytest.mark.asyncio
     async def test_trigger_movie_scan_with_id(self, mock_settings, mock_aiohttp_session):
         """Test triggering movie scan with specific ID."""
-        from app.bazarr_client import BazarrClient
+        from app.utils.bazarr_client import BazarrClient
         
         mock_response = AsyncMock()
         mock_response.status = 200
@@ -232,7 +232,7 @@ class TestBazarrClientMovieScan:
         mock_response.__aexit__ = AsyncMock(return_value=None)
         mock_aiohttp_session.patch = MagicMock(return_value=mock_response)
         
-        with patch('app.bazarr_client.get_settings', return_value=mock_settings):
+        with patch('app.utils.bazarr_client.get_settings', return_value=mock_settings):
             client = BazarrClient()
             client._session = mock_aiohttp_session
             
@@ -246,11 +246,11 @@ class TestBazarrClientDiskScan:
     @pytest.mark.asyncio
     async def test_trigger_disk_scan_not_configured(self, mock_settings):
         """Test disk scan returns False when not configured."""
-        from app.bazarr_client import BazarrClient
+        from app.utils.bazarr_client import BazarrClient
         
         mock_settings.bazarr.url = ""
         
-        with patch('app.bazarr_client.get_settings', return_value=mock_settings):
+        with patch('app.utils.bazarr_client.get_settings', return_value=mock_settings):
             client = BazarrClient()
             result = await client.trigger_disk_scan()
             assert result is False
@@ -262,9 +262,9 @@ class TestBazarrClientSessionManagement:
     @pytest.mark.asyncio
     async def test_close_session(self, mock_settings, mock_aiohttp_session):
         """Test closing the client session."""
-        from app.bazarr_client import BazarrClient
+        from app.utils.bazarr_client import BazarrClient
         
-        with patch('app.bazarr_client.get_settings', return_value=mock_settings):
+        with patch('app.utils.bazarr_client.get_settings', return_value=mock_settings):
             client = BazarrClient()
             client._session = mock_aiohttp_session
             
@@ -274,9 +274,9 @@ class TestBazarrClientSessionManagement:
     @pytest.mark.asyncio
     async def test_close_no_session(self, mock_settings):
         """Test closing when no session exists."""
-        from app.bazarr_client import BazarrClient
+        from app.utils.bazarr_client import BazarrClient
         
-        with patch('app.bazarr_client.get_settings', return_value=mock_settings):
+        with patch('app.utils.bazarr_client.get_settings', return_value=mock_settings):
             client = BazarrClient()
             # Should not raise even with no session
             await client.close()
@@ -288,10 +288,10 @@ class TestNotifyBazarrOfNewSubtitle:
     @pytest.mark.asyncio
     async def test_notify_success(self, mock_settings):
         """Test successful notification."""
-        from app.bazarr_client import notify_bazarr_of_new_subtitle
+        from app.utils.bazarr_client import notify_bazarr_of_new_subtitle
         
-        with patch('app.bazarr_client.get_settings', return_value=mock_settings):
-            with patch('app.bazarr_client.BazarrClient') as MockClient:
+        with patch('app.utils.bazarr_client.get_settings', return_value=mock_settings):
+            with patch('app.utils.bazarr_client.BazarrClient') as MockClient:
                 mock_instance = AsyncMock()
                 mock_instance.search_series_by_path = AsyncMock(return_value={'sonarrSeriesId': 123})
                 mock_instance.trigger_series_scan = AsyncMock(return_value=True)
@@ -304,13 +304,13 @@ class TestNotifyBazarrOfNewSubtitle:
     @pytest.mark.asyncio
     async def test_notify_not_configured(self, mock_settings):
         """Test notification when Bazarr is not configured."""
-        from app.bazarr_client import notify_bazarr_of_new_subtitle
+        from app.utils.bazarr_client import notify_bazarr_of_new_subtitle
         
         mock_settings.bazarr.url = ""
         mock_settings.bazarr.api_key = ""
         mock_settings.bazarr.is_configured = False
         
-        with patch('app.bazarr_client.get_settings', return_value=mock_settings):
+        with patch('app.utils.bazarr_client.get_settings', return_value=mock_settings):
             result = await notify_bazarr_of_new_subtitle("/tv/show/episode.mkv")
             assert result is False
 

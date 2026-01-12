@@ -18,17 +18,18 @@ from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Form, HTTPException, Request
 
-from app.audio_extractor import extract_audio
-from app.azure_batch_transcriber import AzureBatchTranscriber
-from app.bazarr_client import BazarrClient, notify_bazarr_of_new_subtitle
 from app.config import get_settings
-from app.language_code import LanguageCode
-from app.media_server_client import (JellyfinClient, PlexClient,
-                                     refresh_all_configured_servers)
-from app.skip_checker import should_skip_file
-from app.subtitle_utils import (append_credit_line,
-                                format_language_for_filename, get_srt_path,
-                                is_audio_file, save_lrc, save_srt)
+from app.utils.audio_extractor import extract_audio
+from app.utils.azure_batch_transcriber import AzureBatchTranscriber
+from app.utils.bazarr_client import BazarrClient, notify_bazarr_of_new_subtitle
+from app.utils.language_code import LanguageCode
+from app.utils.media_server_client import (JellyfinClient, PlexClient,
+                                           refresh_all_configured_servers)
+from app.utils.skip_checker import should_skip_file
+from app.utils.subtitle_utils import (append_credit_line,
+                                      format_language_for_filename,
+                                      get_srt_path, is_audio_file, save_lrc,
+                                      save_srt)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/webhook", tags=["Webhooks"])
@@ -102,8 +103,8 @@ async def process_media_file(
         # Determine which audio track to extract (PREFERRED_AUDIO_LANGUAGES)
         audio_track = 0  # Default to first track
         if not is_audio and settings.transcription.preferred_audio_languages_list:
-            from app.audio_extractor import (find_preferred_audio_track,
-                                             get_audio_tracks)
+            from app.utils.audio_extractor import (find_preferred_audio_track,
+                                                   get_audio_tracks)
             audio_tracks = await get_audio_tracks(file_path)
             if audio_tracks:
                 preferred_langs = settings.transcription.preferred_audio_languages_list

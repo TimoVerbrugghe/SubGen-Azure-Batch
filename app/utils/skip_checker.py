@@ -17,8 +17,8 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 from app.config import SkipConfig, get_settings
-from app.language_code import LanguageCode
-from app.subtitle_utils import SUBTITLE_EXTENSIONS
+from app.utils.language_code import LanguageCode
+from app.utils.subtitle_utils import SUBTITLE_EXTENSIONS
 
 logger = logging.getLogger(__name__)
 
@@ -512,8 +512,8 @@ async def should_skip_file(
     if settings.transcription.limit_to_preferred_audio_languages:
         preferred_langs = settings.transcription.preferred_audio_languages_list
         if preferred_langs:
-            from app.audio_extractor import (get_audio_tracks,
-                                             has_preferred_audio_language)
+            from app.utils.audio_extractor import (
+                get_audio_tracks, has_preferred_audio_language)
             audio_tracks = await get_audio_tracks(media_path)
             if audio_tracks and not has_preferred_audio_language(audio_tracks, preferred_langs):
                 preferred_names = ', '.join(preferred_langs)

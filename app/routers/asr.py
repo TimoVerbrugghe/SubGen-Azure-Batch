@@ -18,12 +18,12 @@ from typing import Optional, Union
 from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 from fastapi.responses import Response, StreamingResponse
 
-from app.audio_extractor import extract_audio_segment, make_temp_dir
-from app.azure_batch_transcriber import AzureBatchTranscriber
 from app.config import (SUBGEN_AZURE_BATCH_VERSION, get_settings,
                         require_azure_configured)
-from app.language_code import LanguageCode
 from app.transcription_service import JobSource, TranscriptionService
+from app.utils.audio_extractor import extract_audio_segment, make_temp_dir
+from app.utils.azure_batch_transcriber import AzureBatchTranscriber
+from app.utils.language_code import LanguageCode
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["ASR"])

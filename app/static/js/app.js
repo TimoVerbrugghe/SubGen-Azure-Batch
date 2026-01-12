@@ -693,6 +693,13 @@ class SubGenApp {
             return;
         }
         
+        const btn = document.getElementById('btn-transcribe');
+        const originalContent = btn.innerHTML;
+        
+        // Show loading state
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner"></span> Submitting...';
+        
         const language = document.getElementById('language-select')?.value ?? 'en';
         const notifyBazarr = document.getElementById('notify-bazarr')?.checked ?? true;
         const skipIfExists = document.getElementById('skip-existing')?.checked ?? true;
@@ -725,7 +732,7 @@ class SubGenApp {
             
             const result = await response.json();
             
-            this.showToast(`Started ${result.job_count} transcription jobs`, 'success');
+            this.showToast(`Added ${result.job_count} transcription jobs`, 'success');
             this.clearSelection();
             
             // Add session to tracking
@@ -741,6 +748,11 @@ class SubGenApp {
         } catch (error) {
             console.error('Failed to start transcription:', error);
             this.showToast(`Error: ${error.message}`, 'error');
+        } finally {
+            // Restore button state
+            btn.innerHTML = originalContent;
+            // Re-enable only if there are still selections
+            btn.disabled = this.selectedFiles.size === 0 && this.selectedFolders.size === 0;
         }
     }
     

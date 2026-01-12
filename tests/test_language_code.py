@@ -16,7 +16,7 @@ class TestLanguageCodeEnum:
     
     def test_english_properties(self):
         """Test English language code properties."""
-        from app.language_code import LanguageCode
+        from app.utils.language_code import LanguageCode
         
         lang = LanguageCode.ENGLISH
         assert lang.iso_639_1 == "en"
@@ -27,7 +27,7 @@ class TestLanguageCodeEnum:
     
     def test_german_properties(self):
         """Test German language code properties."""
-        from app.language_code import LanguageCode
+        from app.utils.language_code import LanguageCode
         
         lang = LanguageCode.GERMAN
         assert lang.iso_639_1 == "de"
@@ -38,7 +38,7 @@ class TestLanguageCodeEnum:
     
     def test_french_properties(self):
         """Test French language code properties."""
-        from app.language_code import LanguageCode
+        from app.utils.language_code import LanguageCode
         
         lang = LanguageCode.FRENCH
         assert lang.iso_639_1 == "fr"
@@ -49,7 +49,7 @@ class TestLanguageCodeEnum:
     
     def test_none_language(self):
         """Test NONE language code."""
-        from app.language_code import LanguageCode
+        from app.utils.language_code import LanguageCode
         
         lang = LanguageCode.NONE
         assert lang.iso_639_1 is None
@@ -62,7 +62,7 @@ class TestFromIso6391:
     
     def test_valid_codes(self):
         """Test parsing valid ISO 639-1 codes."""
-        from app.language_code import LanguageCode
+        from app.utils.language_code import LanguageCode
         
         assert LanguageCode.from_iso_639_1("en") == LanguageCode.ENGLISH
         assert LanguageCode.from_iso_639_1("de") == LanguageCode.GERMAN
@@ -73,7 +73,7 @@ class TestFromIso6391:
     
     def test_invalid_code_returns_none(self):
         """Test that invalid codes return NONE."""
-        from app.language_code import LanguageCode
+        from app.utils.language_code import LanguageCode
         
         assert LanguageCode.from_iso_639_1("xx") == LanguageCode.NONE
         assert LanguageCode.from_iso_639_1("invalid") == LanguageCode.NONE
@@ -84,7 +84,7 @@ class TestFromIso6392:
     
     def test_valid_terminology_codes(self):
         """Test parsing valid ISO 639-2/T codes."""
-        from app.language_code import LanguageCode
+        from app.utils.language_code import LanguageCode
         
         assert LanguageCode.from_iso_639_2("eng") == LanguageCode.ENGLISH
         assert LanguageCode.from_iso_639_2("deu") == LanguageCode.GERMAN
@@ -92,14 +92,14 @@ class TestFromIso6392:
     
     def test_valid_bibliographic_codes(self):
         """Test parsing valid ISO 639-2/B codes."""
-        from app.language_code import LanguageCode
+        from app.utils.language_code import LanguageCode
         
         assert LanguageCode.from_iso_639_2("ger") == LanguageCode.GERMAN
         assert LanguageCode.from_iso_639_2("fre") == LanguageCode.FRENCH
     
     def test_invalid_code_returns_none(self):
         """Test that invalid codes return NONE."""
-        from app.language_code import LanguageCode
+        from app.utils.language_code import LanguageCode
         
         assert LanguageCode.from_iso_639_2("xxx") == LanguageCode.NONE
 
@@ -109,7 +109,7 @@ class TestFromName:
     
     def test_english_names(self):
         """Test parsing English language names."""
-        from app.language_code import LanguageCode
+        from app.utils.language_code import LanguageCode
         
         assert LanguageCode.from_name("English") == LanguageCode.ENGLISH
         assert LanguageCode.from_name("German") == LanguageCode.GERMAN
@@ -118,7 +118,7 @@ class TestFromName:
     
     def test_native_names(self):
         """Test parsing native language names."""
-        from app.language_code import LanguageCode
+        from app.utils.language_code import LanguageCode
         
         assert LanguageCode.from_name("Deutsch") == LanguageCode.GERMAN
         assert LanguageCode.from_name("Français") == LanguageCode.FRENCH
@@ -126,7 +126,7 @@ class TestFromName:
     
     def test_case_insensitive(self):
         """Test case-insensitive name matching."""
-        from app.language_code import LanguageCode
+        from app.utils.language_code import LanguageCode
         
         assert LanguageCode.from_name("english") == LanguageCode.ENGLISH
         assert LanguageCode.from_name("ENGLISH") == LanguageCode.ENGLISH
@@ -138,7 +138,7 @@ class TestFromString:
     
     def test_iso_639_1_codes(self):
         """Test parsing ISO 639-1 codes."""
-        from app.language_code import LanguageCode
+        from app.utils.language_code import LanguageCode
         
         assert LanguageCode.from_string("en") == LanguageCode.ENGLISH
         assert LanguageCode.from_string("de") == LanguageCode.GERMAN
@@ -146,7 +146,7 @@ class TestFromString:
     
     def test_iso_639_2_codes(self):
         """Test parsing ISO 639-2 codes."""
-        from app.language_code import LanguageCode
+        from app.utils.language_code import LanguageCode
         
         assert LanguageCode.from_string("eng") == LanguageCode.ENGLISH
         assert LanguageCode.from_string("ger") == LanguageCode.GERMAN
@@ -154,7 +154,7 @@ class TestFromString:
     
     def test_language_names(self):
         """Test parsing language names."""
-        from app.language_code import LanguageCode
+        from app.utils.language_code import LanguageCode
         
         assert LanguageCode.from_string("English") == LanguageCode.ENGLISH
         assert LanguageCode.from_string("German") == LanguageCode.GERMAN
@@ -162,14 +162,14 @@ class TestFromString:
     
     def test_with_whitespace(self):
         """Test handling of whitespace."""
-        from app.language_code import LanguageCode
+        from app.utils.language_code import LanguageCode
         
         assert LanguageCode.from_string("  en  ") == LanguageCode.ENGLISH
         assert LanguageCode.from_string("\tde\n") == LanguageCode.GERMAN
     
     def test_none_input(self):
         """Test handling of None input."""
-        from app.language_code import LanguageCode
+        from app.utils.language_code import LanguageCode
 
         # Note: from_string accepts str, but handles None internally
         # This tests the actual behavior even if type hints say otherwise
@@ -178,7 +178,7 @@ class TestFromString:
     
     def test_invalid_returns_none(self):
         """Test that invalid strings return NONE."""
-        from app.language_code import LanguageCode
+        from app.utils.language_code import LanguageCode
         
         assert LanguageCode.from_string("xyz") == LanguageCode.NONE
         assert LanguageCode.from_string("invalid") == LanguageCode.NONE
@@ -190,7 +190,7 @@ class TestIsValidLanguage:
     
     def test_valid_languages(self):
         """Test that valid languages return True."""
-        from app.language_code import LanguageCode
+        from app.utils.language_code import LanguageCode
         
         assert LanguageCode.is_valid_language("en") is True
         assert LanguageCode.is_valid_language("eng") is True
@@ -199,7 +199,7 @@ class TestIsValidLanguage:
     
     def test_invalid_languages(self):
         """Test that invalid languages return False."""
-        from app.language_code import LanguageCode
+        from app.utils.language_code import LanguageCode
         
         assert LanguageCode.is_valid_language("xyz") is False
         assert LanguageCode.is_valid_language("invalid") is False
@@ -211,7 +211,7 @@ class TestToAzureLocale:
     
     def test_common_locales(self):
         """Test common Azure locale mappings."""
-        from app.language_code import LanguageCode
+        from app.utils.language_code import LanguageCode
         
         assert LanguageCode.ENGLISH.to_azure_locale() == "en-US"
         assert LanguageCode.GERMAN.to_azure_locale() == "de-DE"
@@ -222,7 +222,7 @@ class TestToAzureLocale:
     
     def test_european_locales(self):
         """Test European language locales."""
-        from app.language_code import LanguageCode
+        from app.utils.language_code import LanguageCode
         
         assert LanguageCode.ITALIAN.to_azure_locale() == "it-IT"
         assert LanguageCode.DUTCH.to_azure_locale() == "nl-NL"
@@ -235,7 +235,7 @@ class TestToIsoMethods:
     
     def test_to_iso_639_1(self):
         """Test to_iso_639_1 method."""
-        from app.language_code import LanguageCode
+        from app.utils.language_code import LanguageCode
         
         assert LanguageCode.ENGLISH.to_iso_639_1() == "en"
         assert LanguageCode.GERMAN.to_iso_639_1() == "de"
@@ -243,7 +243,7 @@ class TestToIsoMethods:
     
     def test_to_iso_639_2_t(self):
         """Test to_iso_639_2_t method (terminology)."""
-        from app.language_code import LanguageCode
+        from app.utils.language_code import LanguageCode
         
         assert LanguageCode.ENGLISH.to_iso_639_2_t() == "eng"
         assert LanguageCode.GERMAN.to_iso_639_2_t() == "deu"
@@ -251,7 +251,7 @@ class TestToIsoMethods:
     
     def test_to_iso_639_2_b(self):
         """Test to_iso_639_2_b method (bibliographic)."""
-        from app.language_code import LanguageCode
+        from app.utils.language_code import LanguageCode
         
         assert LanguageCode.ENGLISH.to_iso_639_2_b() == "eng"
         assert LanguageCode.GERMAN.to_iso_639_2_b() == "ger"  # Different from T
@@ -263,7 +263,7 @@ class TestToName:
     
     def test_english_names(self):
         """Test getting English names."""
-        from app.language_code import LanguageCode
+        from app.utils.language_code import LanguageCode
         
         assert LanguageCode.ENGLISH.to_name(in_english=True) == "English"
         assert LanguageCode.GERMAN.to_name(in_english=True) == "German"
@@ -271,7 +271,7 @@ class TestToName:
     
     def test_native_names(self):
         """Test getting native names."""
-        from app.language_code import LanguageCode
+        from app.utils.language_code import LanguageCode
         
         assert LanguageCode.ENGLISH.to_name(in_english=False) == "English"
         assert LanguageCode.GERMAN.to_name(in_english=False) == "Deutsch"
@@ -283,7 +283,7 @@ class TestLanguageCodeCompleteness:
     
     def test_all_common_languages_exist(self):
         """Test that all commonly used languages are defined."""
-        from app.language_code import LanguageCode
+        from app.utils.language_code import LanguageCode
 
         # Major world languages
         common_languages = [
@@ -298,7 +298,7 @@ class TestLanguageCodeCompleteness:
     
     def test_no_duplicate_iso_639_1_codes(self):
         """Test that ISO 639-1 codes are unique."""
-        from app.language_code import LanguageCode
+        from app.utils.language_code import LanguageCode
         
         seen_codes = {}
         for lang in LanguageCode:

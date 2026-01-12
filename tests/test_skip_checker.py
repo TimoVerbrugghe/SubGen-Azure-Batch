@@ -21,7 +21,7 @@ class TestSkipResult:
     
     def test_skip_result_creation(self):
         """Test creating a skip result."""
-        from app.skip_checker import SkipResult
+        from app.utils.skip_checker import SkipResult
         
         result = SkipResult(should_skip=True, reason="Test reason")
         assert result.should_skip is True
@@ -29,7 +29,7 @@ class TestSkipResult:
     
     def test_skip_factory(self):
         """Test SkipResult.skip factory method."""
-        from app.skip_checker import SkipResult
+        from app.utils.skip_checker import SkipResult
         
         result = SkipResult.skip("Subtitle exists")
         assert result.should_skip is True
@@ -37,7 +37,7 @@ class TestSkipResult:
     
     def test_proceed_factory(self):
         """Test SkipResult.proceed factory method."""
-        from app.skip_checker import SkipResult
+        from app.utils.skip_checker import SkipResult
         
         result = SkipResult.proceed()
         assert result.should_skip is False
@@ -50,7 +50,7 @@ class TestGetStreamInfo:
     @pytest.mark.asyncio
     async def test_get_stream_info_success(self):
         """Test successful stream info retrieval."""
-        from app.skip_checker import get_stream_info
+        from app.utils.skip_checker import get_stream_info
         
         mock_output = {
             "streams": [
@@ -79,7 +79,7 @@ class TestGetStreamInfo:
     @pytest.mark.asyncio
     async def test_get_stream_info_failure(self):
         """Test stream info returns empty on ffprobe failure."""
-        from app.skip_checker import get_stream_info
+        from app.utils.skip_checker import get_stream_info
         
         mock_process = AsyncMock()
         mock_process.returncode = 1
@@ -96,7 +96,7 @@ class TestGetAudioLanguages:
     
     def test_extracts_audio_languages(self):
         """Test audio language extraction."""
-        from app.skip_checker import get_audio_languages
+        from app.utils.skip_checker import get_audio_languages
         
         stream_info = {
             'audio': [
@@ -112,7 +112,7 @@ class TestGetAudioLanguages:
     
     def test_empty_stream_info(self):
         """Test with empty stream info."""
-        from app.skip_checker import get_audio_languages
+        from app.utils.skip_checker import get_audio_languages
         
         result = get_audio_languages({})
         assert result == []
@@ -123,7 +123,7 @@ class TestGetInternalSubtitleLanguages:
     
     def test_extracts_subtitle_languages(self):
         """Test internal subtitle language extraction."""
-        from app.skip_checker import get_internal_subtitle_languages
+        from app.utils.skip_checker import get_internal_subtitle_languages
         
         stream_info = {
             'audio': [],
@@ -138,7 +138,7 @@ class TestGetInternalSubtitleLanguages:
     
     def test_filters_empty_languages(self):
         """Test that empty languages are filtered."""
-        from app.skip_checker import get_internal_subtitle_languages
+        from app.utils.skip_checker import get_internal_subtitle_languages
         
         stream_info = {
             'audio': [],
@@ -158,7 +158,7 @@ class TestFindExternalSubtitles:
     
     def test_find_subtitles_in_directory(self, temp_dir):
         """Test finding external subtitle files."""
-        from app.skip_checker import find_external_subtitles
+        from app.utils.skip_checker import find_external_subtitles
 
         # Create media file
         video_path = os.path.join(temp_dir, "movie.mkv")
@@ -187,7 +187,7 @@ class TestFindExternalSubtitles:
     
     def test_nonexistent_directory(self):
         """Test handling of non-existent directory."""
-        from app.skip_checker import find_external_subtitles
+        from app.utils.skip_checker import find_external_subtitles
         
         result = find_external_subtitles("/nonexistent/path/video.mkv")
         assert result == []
@@ -198,7 +198,7 @@ class TestHasExternalSubtitleForLanguage:
     
     def test_finds_matching_subtitle(self, temp_dir):
         """Test finding subtitle for specific language."""
-        from app.skip_checker import has_external_subtitle_for_language
+        from app.utils.skip_checker import has_external_subtitle_for_language
 
         # Create media file
         video_path = os.path.join(temp_dir, "movie.mkv")
@@ -219,7 +219,7 @@ class TestHasExternalSubtitleForLanguage:
     
     def test_only_subgen_filter(self, temp_dir):
         """Test filtering to only SubGen subtitles."""
-        from app.skip_checker import has_external_subtitle_for_language
+        from app.utils.skip_checker import has_external_subtitle_for_language
 
         # Create media file
         video_path = os.path.join(temp_dir, "movie.mkv")
@@ -254,7 +254,7 @@ class TestHasAnyExternalSubtitle:
     
     def test_finds_any_subtitle(self, temp_dir):
         """Test finding any external subtitle."""
-        from app.skip_checker import has_any_external_subtitle
+        from app.utils.skip_checker import has_any_external_subtitle
 
         # Create media file
         video_path = os.path.join(temp_dir, "movie.mkv")
@@ -281,7 +281,7 @@ class TestShouldSkipFile:
     @pytest.mark.asyncio
     async def test_skip_nonexistent_file(self):
         """Test that non-existent files are skipped."""
-        from app.skip_checker import should_skip_file
+        from app.utils.skip_checker import should_skip_file
         
         result = await should_skip_file("/nonexistent/file.mkv", "en")
         assert result.should_skip is True
@@ -291,7 +291,7 @@ class TestShouldSkipFile:
     @pytest.mark.asyncio
     async def test_skip_non_existent_file(self, temp_dir):
         """Test that non-existent files are skipped."""
-        from app.skip_checker import should_skip_file
+        from app.utils.skip_checker import should_skip_file
 
         nonexistent_path = os.path.join(temp_dir, "nonexistent.mkv")
         
@@ -303,7 +303,7 @@ class TestShouldSkipFile:
     @pytest.mark.asyncio
     async def test_existing_file_not_skipped_by_default(self, temp_dir, patched_settings):
         """Test that existing media files are not skipped when skip config is disabled."""
-        from app.skip_checker import should_skip_file
+        from app.utils.skip_checker import should_skip_file
 
         # Create a mock video file
         video_path = os.path.join(temp_dir, "video.mkv")
@@ -324,7 +324,7 @@ class TestShouldSkipFile:
     @pytest.mark.asyncio
     async def test_proceed_for_valid_media(self, temp_video_file, patched_settings):
         """Test that valid media files proceed (with skip config disabled)."""
-        from app.skip_checker import should_skip_file
+        from app.utils.skip_checker import should_skip_file
 
         # Configure skip settings to not skip
         patched_settings.skip.skip_if_subgen_exists = False
@@ -332,7 +332,7 @@ class TestShouldSkipFile:
         patched_settings.skip.skip_if_internal_subtitle_exists = False
         patched_settings.skip.enabled_checks = []
         
-        with patch('app.skip_checker.get_stream_info', new_callable=AsyncMock) as mock_stream:
+        with patch('app.utils.skip_checker.get_stream_info', new_callable=AsyncMock) as mock_stream:
             mock_stream.return_value = {'audio': [], 'subtitle': []}
             
             result = await should_skip_file(temp_video_file, "en")
@@ -346,7 +346,7 @@ class TestSkipConfigIntegration:
     @pytest.mark.asyncio
     async def test_skip_if_subgen_exists(self, temp_dir, patched_settings):
         """Test skipping when SubGen subtitle already exists."""
-        from app.skip_checker import should_skip_file
+        from app.utils.skip_checker import should_skip_file
 
         # Enable skip_if_subgen_exists
         patched_settings.skip.skip_if_subgen_exists = True
@@ -363,7 +363,7 @@ class TestSkipConfigIntegration:
         with open(sub_path, 'w') as f:
             f.write("subtitle")
         
-        with patch('app.skip_checker.get_stream_info', new_callable=AsyncMock) as mock_stream:
+        with patch('app.utils.skip_checker.get_stream_info', new_callable=AsyncMock) as mock_stream:
             mock_stream.return_value = {'audio': [], 'subtitle': []}
             
             result = await should_skip_file(video_path, "en")

@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-from app.language_code import LanguageCode
+from app.utils.language_code import LanguageCode
 
 logger = logging.getLogger(__name__)
 
@@ -447,7 +447,7 @@ def validate_srt(content: str) -> Tuple[bool, Optional[str]]:
 
 
 # Import audio file utilities from audio_extractor (canonical location)
-from app.audio_extractor import AUDIO_EXTENSIONS, is_audio_file
+from app.utils.audio_extractor import AUDIO_EXTENSIONS, is_audio_file
 
 
 def write_lrc(

@@ -178,7 +178,7 @@ The following environment variables are available in Docker. They will default t
 | MEDIA_FOLDERS | '/tv,/movies' | **(New)** Comma-separated list of paths to show in the Web UI file browser |
 | SUBTITLE_LANGUAGE | '' | Default subtitle language code (leave empty for auto-detect) |
 | **Processing Settings** |   |   |
-| CONCURRENT_TRANSCRIPTIONS | 50 | **(Changed)** Number of jobs to process in parallel. Default increased for cloud processing |
+| CONCURRENT_TRANSCRIPTIONS | 50 | **(Changed)** Global limit for parallel transcription jobs. Enforced across all sources (UI batch, Bazarr, webhooks). Bazarr requests get priority over batch jobs. |
 | TRANSCODE_DIR | '/transcode' | **(New)** Directory for temp audio files. Mount a volume here to reduce memory usage during batch processing |
 | JOB_POLL_INTERVAL | 10 | **(New)** Seconds between polling Azure for job status |
 | PROCESS_ADDED_MEDIA | False | Process media when added to library (requires webhook integration) |

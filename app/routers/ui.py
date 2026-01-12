@@ -18,7 +18,7 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
 from app.config import SUBGEN_AZURE_BATCH_VERSION, get_settings
-from app.language_code import LanguageCode
+from app.utils.language_code import LanguageCode
 
 # Optional Azure imports (may not be installed in all environments)
 try:
@@ -80,9 +80,9 @@ class StatusResponse(BaseModel):
 
 
 # Import media extensions from audio_extractor for consistency
-from app.audio_extractor import (AUDIO_EXTENSIONS, MEDIA_EXTENSIONS,
-                                 VIDEO_EXTENSIONS)
-from app.subtitle_utils import SUBTITLE_EXTENSIONS
+from app.utils.audio_extractor import (AUDIO_EXTENSIONS, MEDIA_EXTENSIONS,
+                                       VIDEO_EXTENSIONS)
+from app.utils.subtitle_utils import SUBTITLE_EXTENSIONS
 
 
 def get_templates() -> Jinja2Templates:
@@ -238,7 +238,7 @@ async def test_notifications():
     
     Returns status for each configured notification service.
     """
-    from app.notification_service import NotificationService
+    from app.utils.notification_service import NotificationService
     
     notifier = NotificationService.get_instance()
     
@@ -262,7 +262,7 @@ async def get_notification_config():
     """
     Get notification configuration status (without sensitive data).
     """
-    from app.notification_service import NotificationService
+    from app.utils.notification_service import NotificationService
     
     notifier = NotificationService.get_instance()
     config = notifier.config

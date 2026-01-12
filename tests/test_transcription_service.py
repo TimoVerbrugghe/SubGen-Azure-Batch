@@ -313,7 +313,7 @@ class TestTranscriptionServiceJobs:
         )
         
         # Patch notify_failure at source to avoid actual notifications
-        with patch('app.notification_service.notify_failure', new_callable=AsyncMock):
+        with patch('app.utils.notification_service.notify_failure', new_callable=AsyncMock):
             await TranscriptionService.update_job_status(
                 session.id, job.id, JobStatus.TRANSCRIBING
             )
@@ -361,7 +361,7 @@ class TestTranscriptionServiceJobs:
         )
         
         # Patch notify_failure at source to avoid actual notifications
-        with patch('app.notification_service.notify_failure', new_callable=AsyncMock):
+        with patch('app.utils.notification_service.notify_failure', new_callable=AsyncMock):
             await TranscriptionService.update_job_status(
                 session.id, job.id, JobStatus.FAILED,
                 error="Test error message"
@@ -424,6 +424,94 @@ class TestTranscriptionServiceHelpers:
         
         locale = TranscriptionService._get_azure_locale("fr")
         assert locale == "fr-FR"
+
+
+class TestTranscriptionServiceConcurrency:
+    """Test global transcription concurrency control with priority queue."""
+    
+    @pytest.fixture(autouse=True)
+    def reset_concurrency_state(self):
+        """Reset concurrency state before and after each test."""
+        from app.transcription_service import TranscriptionService
+
+        # Reset semaphore and waiters
+        TranscriptionService._transcription_semaphore = None
+        TranscriptionService._priority_waiters = []
+        TranscriptionService._normal_waiters = []
+        yield
+        TranscriptionService._transcription_semaphore = None
+        TranscriptionService._priority_waiters = []
+        TranscriptionService._normal_waiters = []
+    
+    def test_semaphore_lazy_initialization(self):
+        """Test that transcription semaphore is lazily initialized."""
+        from app.transcription_service import TranscriptionService
+
+        # Should be None initially (after reset)
+        assert TranscriptionService._transcription_semaphore is None
+        
+        # Should be created on first access
+        semaphore = TranscriptionService._get_transcription_semaphore()
+        assert semaphore is not None
+        assert TranscriptionService._transcription_semaphore is semaphore
+        
+        # Should return same instance on subsequent calls
+        semaphore2 = TranscriptionService._get_transcription_semaphore()
+        assert semaphore2 is semaphore
+    
+    @pytest.mark.asyncio
+    async def test_acquire_and_release_slot(self):
+        """Test basic acquire and release of transcription slots."""
+        from app.transcription_service import TranscriptionService
+
+        # Acquire a slot
+        await TranscriptionService.acquire_transcription_slot(priority=False)
+        
+        # Release it
+        await TranscriptionService.release_transcription_slot()
+        
+        # Should complete without errors
+    
+    @pytest.mark.asyncio
+    async def test_priority_acquire(self):
+        """Test that priority flag can be used for acquisition."""
+        from app.transcription_service import TranscriptionService
+
+        # Acquire with priority
+        await TranscriptionService.acquire_transcription_slot(priority=True)
+        
+        # Release it
+        await TranscriptionService.release_transcription_slot()
+        
+        # Should complete without errors
+    
+    @pytest.mark.asyncio
+    async def test_multiple_slots(self):
+        """Test acquiring multiple slots up to limit."""
+        from app.transcription_service import TranscriptionService
+
+        # Acquire 3 slots (well under default limit of 50)
+        for _ in range(3):
+            await TranscriptionService.acquire_transcription_slot(priority=False)
+        
+        # Release them all
+        for _ in range(3):
+            await TranscriptionService.release_transcription_slot()
+    
+    @pytest.mark.asyncio
+    async def test_priority_waiters_list_management(self):
+        """Test that priority and normal waiters are tracked separately."""
+        from app.transcription_service import TranscriptionService
+
+        # Initially empty
+        assert len(TranscriptionService._priority_waiters) == 0
+        assert len(TranscriptionService._normal_waiters) == 0
+        
+        # After acquiring (when not at capacity), lists should still be empty
+        await TranscriptionService.acquire_transcription_slot(priority=True)
+        assert len(TranscriptionService._priority_waiters) == 0
+        
+        await TranscriptionService.release_transcription_slot()
 
 
 if __name__ == "__main__":

@@ -336,7 +336,7 @@ def mock_aiohttp_session():
 @pytest.fixture
 def mock_transcription_result():
     """Create a mock transcription result."""
-    from app.azure_batch_transcriber import (TranscriptionResult,
+    from app.utils.azure_batch_transcriber import (TranscriptionResult,
                                              TranscriptionSegment)
     
     return TranscriptionResult(

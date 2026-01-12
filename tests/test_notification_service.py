@@ -20,7 +20,7 @@ class TestNotificationConfig:
     
     def test_pushover_configured_when_both_set(self):
         """Test pushover_configured returns True when both keys are set."""
-        from app.notification_service import NotificationConfig
+        from app.utils.notification_service import NotificationConfig
         
         config = NotificationConfig(
             pushover_user_key="user123",
@@ -30,7 +30,7 @@ class TestNotificationConfig:
     
     def test_pushover_not_configured_when_missing_key(self):
         """Test pushover_configured returns False when key is missing."""
-        from app.notification_service import NotificationConfig
+        from app.utils.notification_service import NotificationConfig
         
         config = NotificationConfig(
             pushover_user_key="",
@@ -40,7 +40,7 @@ class TestNotificationConfig:
     
     def test_pushover_not_configured_when_missing_token(self):
         """Test pushover_configured returns False when token is missing."""
-        from app.notification_service import NotificationConfig
+        from app.utils.notification_service import NotificationConfig
         
         config = NotificationConfig(
             pushover_user_key="user123",
@@ -50,7 +50,7 @@ class TestNotificationConfig:
     
     def test_is_configured_when_pushover_configured(self):
         """Test is_configured returns True when Pushover is configured."""
-        from app.notification_service import NotificationConfig
+        from app.utils.notification_service import NotificationConfig
         
         config = NotificationConfig(
             pushover_user_key="user123",
@@ -60,7 +60,7 @@ class TestNotificationConfig:
     
     def test_is_configured_when_nothing_configured(self):
         """Test is_configured returns False when nothing is configured."""
-        from app.notification_service import NotificationConfig
+        from app.utils.notification_service import NotificationConfig
         
         config = NotificationConfig()
         assert config.is_configured is False
@@ -71,7 +71,7 @@ class TestNotificationServiceSingleton:
     
     def test_get_instance_returns_same_object(self):
         """Test that get_instance returns the same singleton."""
-        from app.notification_service import NotificationService
+        from app.utils.notification_service import NotificationService
 
         # Reset singleton
         NotificationService.reset_instance()
@@ -87,7 +87,7 @@ class TestNotificationServiceSingleton:
     
     def test_reset_instance_clears_singleton(self):
         """Test that reset_instance clears the singleton."""
-        from app.notification_service import NotificationService
+        from app.utils.notification_service import NotificationService
         
         with patch.dict(os.environ, {}, clear=True):
             instance1 = NotificationService.get_instance()
@@ -106,7 +106,7 @@ class TestNotificationServiceConfig:
     
     def test_loads_pushover_config_from_env(self):
         """Test that Pushover config is loaded from environment."""
-        from app.notification_service import NotificationService
+        from app.utils.notification_service import NotificationService
         
         NotificationService.reset_instance()
         
@@ -127,7 +127,7 @@ class TestNotificationServiceConfig:
     
     def test_notify_on_failure_defaults_to_true(self):
         """Test that notify_on_failure defaults to True."""
-        from app.notification_service import NotificationService
+        from app.utils.notification_service import NotificationService
         
         NotificationService.reset_instance()
         
@@ -144,7 +144,7 @@ class TestSendPushover:
     @pytest.fixture
     def configured_service(self):
         """Create a NotificationService with Pushover configured."""
-        from app.notification_service import (NotificationConfig,
+        from app.utils.notification_service import (NotificationConfig,
                                               NotificationService)
         
         config = NotificationConfig(
@@ -197,7 +197,7 @@ class TestSendPushover:
     @pytest.mark.asyncio
     async def test_send_pushover_not_configured(self):
         """Test that send_pushover returns False when not configured."""
-        from app.notification_service import (NotificationConfig,
+        from app.utils.notification_service import (NotificationConfig,
                                               NotificationService)
         
         config = NotificationConfig()  # Not configured
@@ -217,7 +217,7 @@ class TestNotifyJobFailed:
     @pytest.fixture
     def configured_service(self):
         """Create a NotificationService with Pushover configured."""
-        from app.notification_service import (NotificationConfig,
+        from app.utils.notification_service import (NotificationConfig,
                                               NotificationService)
         
         config = NotificationConfig(
@@ -253,7 +253,7 @@ class TestNotifyJobFailed:
     @pytest.mark.asyncio
     async def test_notify_job_failed_disabled(self):
         """Test that notifications are skipped when disabled."""
-        from app.notification_service import (NotificationConfig,
+        from app.utils.notification_service import (NotificationConfig,
                                               NotificationService)
         
         config = NotificationConfig(
@@ -273,7 +273,7 @@ class TestNotifyJobFailed:
     @pytest.mark.asyncio
     async def test_notify_job_failed_not_configured(self):
         """Test that notifications are skipped when not configured."""
-        from app.notification_service import (NotificationConfig,
+        from app.utils.notification_service import (NotificationConfig,
                                               NotificationService)
         
         config = NotificationConfig(notify_on_failure=True)  # Enabled but not configured
@@ -293,7 +293,7 @@ class TestTestNotification:
     @pytest.mark.asyncio
     async def test_test_notification_with_pushover(self):
         """Test test_notification returns correct status."""
-        from app.notification_service import (NotificationConfig,
+        from app.utils.notification_service import (NotificationConfig,
                                               NotificationService)
         
         config = NotificationConfig(
@@ -313,7 +313,7 @@ class TestTestNotification:
     @pytest.mark.asyncio
     async def test_test_notification_not_configured(self):
         """Test test_notification reports unconfigured status."""
-        from app.notification_service import (NotificationConfig,
+        from app.utils.notification_service import (NotificationConfig,
                                               NotificationService)
         
         config = NotificationConfig()  # Not configured
@@ -331,7 +331,7 @@ class TestNotifyFailureConvenience:
     @pytest.mark.asyncio
     async def test_notify_failure_success(self):
         """Test notify_failure convenience function."""
-        from app.notification_service import (NotificationService,
+        from app.utils.notification_service import (NotificationService,
                                               notify_failure)
         
         NotificationService.reset_instance()
@@ -356,7 +356,7 @@ class TestNotifyFailureConvenience:
     @pytest.mark.asyncio
     async def test_notify_failure_handles_exception(self):
         """Test that notify_failure catches exceptions."""
-        from app.notification_service import (NotificationService,
+        from app.utils.notification_service import (NotificationService,
                                               notify_failure)
         
         NotificationService.reset_instance()
