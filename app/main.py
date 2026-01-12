@@ -5,6 +5,7 @@ This is the main FastAPI application entry point.
 """
 
 import logging
+import os
 import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -117,15 +118,21 @@ def main():
     """Run the application with uvicorn."""
     settings = get_settings()
     
-    # Port is fixed at 9000 for Docker deployments
-    # Change the port in docker-compose.yml or docker run command if needed
-    uvicorn.run(
-        "app.main:app",
-        host="0.0.0.0",
-        port=9000,
-        reload=settings.debug,
-        log_level="debug" if settings.debug else "info",
-    )
+    # Build uvicorn config
+    uvicorn_kwargs = {
+        "host": "0.0.0.0",
+        "port": 9000,  # Fixed for Docker deployments, change in docker-compose.yml if needed
+        "reload": settings.debug,
+        "log_level": "debug" if settings.debug else "info",
+    }
+    
+    # TCP keepalive timeout - helps prevent connection resets during long transcriptions
+    # Only set if explicitly configured via UVICORN_TIMEOUT_KEEP_ALIVE environment variable
+    timeout_keep_alive_env = os.getenv("UVICORN_TIMEOUT_KEEP_ALIVE")
+    if timeout_keep_alive_env is not None:
+        uvicorn_kwargs["timeout_keep_alive"] = int(timeout_keep_alive_env)
+    
+    uvicorn.run("app.main:app", **uvicorn_kwargs)
 
 
 if __name__ == "__main__":

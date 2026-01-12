@@ -173,6 +173,7 @@ The following environment variables are available in Docker. They will default t
 | AZURE_STORAGE_CONTAINER | 'transcription-audio' | **(New)** Container name for temporary audio uploads |
 | **Server Settings** |   |   |
 | DEBUG | False | Provides debug data that can be helpful to troubleshoot issues |
+| UVICORN_TIMEOUT_KEEP_ALIVE | (unset) | **(New)** TCP keepalive timeout in seconds. Set to prevent connection resets during long transcriptions (e.g., 300). Only applied if set. |
 | **Media Settings** |   |   |
 | MEDIA_FOLDERS | '/tv,/movies' | **(New)** Comma-separated list of paths to show in the Web UI file browser |
 | SUBTITLE_LANGUAGE | '' | Default subtitle language code (leave empty for auto-detect) |

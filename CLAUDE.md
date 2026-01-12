@@ -150,6 +150,7 @@ Each module has a clear, single responsibility to maintain clean architecture an
 | `AZURE_STORAGE_CONNECTION_STRING` | `` | Azure Blob Storage connection string (for audio upload) |
 | `AZURE_STORAGE_CONTAINER` | `transcription-audio` | Container name for audio files |
 | `WEBHOOK_PORT` | `9000` | Port for webhook server |
+| `UVICORN_TIMEOUT_KEEP_ALIVE` | (unset) | TCP keepalive timeout in seconds. Set to prevent connection resets during long transcriptions. |
 | `MEDIA_FOLDERS` | `/tv,/movies` | Comma-separated list of media folders to browse |
 | `SUBTITLE_LANGUAGE` | `en` | Default language for transcription |
 | `BAZARR_URL` | `` | Bazarr server URL (optional) |

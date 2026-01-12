@@ -757,12 +757,27 @@ class SubGenApp {
             return;
         }
         
+        // Save scroll positions of all session job lists before updating
+        const scrollPositions = new Map();
+        for (const card of container.querySelectorAll('.session-card')) {
+            const sessionId = card.dataset.sessionId;
+            const jobsList = card.querySelector('.session-jobs');
+            if (sessionId && jobsList) {
+                scrollPositions.set(sessionId, jobsList.scrollTop);
+            }
+        }
+        
         // Fetch latest status for all sessions
         for (const [sessionId] of this.sessions) {
             try {
                 const response = await fetch(`/api/batch/session/${sessionId}`);
                 if (response.ok) {
                     const status = await response.json();
+                    // Preserve source from initial load (API may not return it on status update)
+                    const existingSession = this.sessions.get(sessionId);
+                    if (existingSession && existingSession.source && !status.source) {
+                        status.source = existingSession.source;
+                    }
                     this.sessions.set(sessionId, status);
                 } else if (response.status === 404) {
                     this.sessions.delete(sessionId);
@@ -821,6 +836,15 @@ class SubGenApp {
         }
         
         container.innerHTML = html;
+        
+        // Restore scroll positions after DOM update
+        for (const card of container.querySelectorAll('.session-card')) {
+            const sessionId = card.dataset.sessionId;
+            const jobsList = card.querySelector('.session-jobs');
+            if (sessionId && jobsList && scrollPositions.has(sessionId)) {
+                jobsList.scrollTop = scrollPositions.get(sessionId);
+            }
+        }
     }
     
     renderSkippedFiles(skipped) {

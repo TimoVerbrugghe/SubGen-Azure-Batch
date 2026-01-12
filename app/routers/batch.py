@@ -139,6 +139,7 @@ class JobStatusResponse(BaseModel):
 class SessionStatusResponse(BaseModel):
     """Status of a batch session."""
     session_id: str
+    source: str = "ui"  # Source of the session: ui, bazarr, api, webhook
     total_jobs: int
     pending: int
     in_progress: int
@@ -455,8 +456,12 @@ async def get_session_status(session_id: str):
         for job in session.jobs.values()
     ]
     
+    # Get session source (fallback to 'ui' for backwards compatibility)
+    session_source = session.source.value if hasattr(session, 'source') else "ui"
+    
     return SessionStatusResponse(
         session_id=session_id,
+        source=session_source,
         total_jobs=len(session.jobs),
         pending=pending,
         in_progress=in_progress,

@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Optional, Union
 
 from fastapi import APIRouter, File, HTTPException, Query, UploadFile
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 
 from app.audio_extractor import extract_audio_segment, make_temp_dir
 from app.azure_batch_transcriber import AzureBatchTranscriber
@@ -134,9 +134,12 @@ async def transcribe_audio(
         else:
             output_content = result.to_srt()
         
-        # Return as streaming response with source header (like original subgen)
-        return StreamingResponse(
-            iter([output_content]),
+        # Return as a plain Response with Content-Length header.
+        # Using Response instead of StreamingResponse avoids chunked transfer encoding,
+        # which can cause ChunkedEncodingError if the connection is interrupted.
+        # Since we already have the complete content, there's no benefit to streaming.
+        return Response(
+            content=output_content,
             media_type="text/plain",
             headers={
                 'Source': 'Transcribed using Azure Batch API from SubGen-Azure-Batch!',

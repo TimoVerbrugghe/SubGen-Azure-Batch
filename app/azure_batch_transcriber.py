@@ -21,11 +21,13 @@ from typing import Any, Dict, List, Optional
 import aiohttp
 
 try:
+    from azure.core.exceptions import AzureError
     from azure.storage.blob import (BlobSasPermissions, BlobServiceClient,
                                     generate_blob_sas)
     AZURE_STORAGE_AVAILABLE = True
 except ImportError:
     AZURE_STORAGE_AVAILABLE = False
+    AzureError = Exception  # Fallback for type hints
     logging.warning("azure-storage-blob not installed. Blob storage features will not work.")
 
 from app.config import get_settings
@@ -184,8 +186,18 @@ class AzureBatchTranscriber:
         if not self.storage_connection_string:
             raise ValueError("AZURE_STORAGE_CONNECTION_STRING is not configured")
         
-        # Create blob client
-        blob_service_client = BlobServiceClient.from_connection_string(self.storage_connection_string)
+        # Create blob client with extended timeouts for large uploads
+        # connection_timeout: time to establish connection (30s)
+        # read_timeout: time to wait for data during read/write (600s = 10 min)
+        blob_service_client = BlobServiceClient.from_connection_string(
+            self.storage_connection_string,
+            connection_timeout=30,
+            read_timeout=600,
+            # Use 4MB blocks for chunked uploads (default is 4MB, but explicit)
+            max_block_size=4 * 1024 * 1024,
+            # Files larger than 64MB will use chunked upload
+            max_single_put_size=64 * 1024 * 1024,
+        )
         
         # Ensure container exists
         container_client = blob_service_client.get_container_client(self.storage_container)
@@ -199,12 +211,42 @@ class AzureBatchTranscriber:
         file_ext = os.path.splitext(file_path)[1]
         blob_name = f"audio/{uuid.uuid4()}{file_ext}"
         
-        # Upload file
-        blob_client = container_client.get_blob_client(blob_name)
-        with open(file_path, 'rb') as f:
-            await asyncio.to_thread(blob_client.upload_blob, f, overwrite=True)
+        # Get file size for logging and upload optimization
+        file_size = os.path.getsize(file_path)
+        file_size_mb = file_size / (1024 * 1024)
+        logger.info(f"Uploading {file_size_mb:.1f} MB audio file to blob: {blob_name}")
         
-        logger.info(f"Uploaded audio to blob: {blob_name}")
+        # Upload file with retry logic
+        blob_client = container_client.get_blob_client(blob_name)
+        max_retries = 3
+        upload_start = datetime.now(timezone.utc)
+        
+        for attempt in range(1, max_retries + 1):
+            try:
+                with open(file_path, 'rb') as f:
+                    # Azure SDK will automatically use chunked upload for files > max_single_put_size
+                    await asyncio.to_thread(
+                        blob_client.upload_blob,
+                        f,
+                        overwrite=True,
+                        max_concurrency=4,  # Parallel upload threads for chunks
+                    )
+                break  # Success
+            except (AzureError, TimeoutError, ConnectionError, OSError) as e:
+                last_error = e
+                if attempt < max_retries:
+                    wait_time = 2 ** attempt  # Exponential backoff: 2, 4, 8 seconds
+                    logger.warning(
+                        f"Upload attempt {attempt}/{max_retries} failed: {e}. "
+                        f"Retrying in {wait_time}s..."
+                    )
+                    await asyncio.sleep(wait_time)
+                else:
+                    logger.error(f"Upload failed after {max_retries} attempts: {e}")
+                    raise
+        
+        upload_duration = (datetime.now(timezone.utc) - upload_start).total_seconds()
+        logger.info(f"Uploaded {file_size_mb:.1f} MB to blob in {upload_duration:.1f}s: {blob_name}")
         
         # Get account name and key for SAS generation
         account_name = blob_service_client.account_name
