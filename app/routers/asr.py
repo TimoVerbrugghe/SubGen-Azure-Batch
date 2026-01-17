@@ -298,22 +298,28 @@ async def detect_language(
         blob_name_to_cleanup: Optional[str] = None
         job_id_to_cleanup: Optional[str] = None
         
+        # Get candidate locales from config for language identification
+        settings = get_settings()
+        candidate_locales_str = settings.transcription.language_detection_candidates
+        candidate_locales = [loc.strip() for loc in candidate_locales_str.split(',') if loc.strip()]
+        
         try:
             # Upload segment to blob storage
             audio_url, blob_name = await transcriber.upload_audio(segment_audio)
             blob_name_to_cleanup = blob_name
             logger.debug(f"Uploaded audio segment to Azure Blob Storage: {blob_name}")
             
-            # Create a short transcription job with language auto-detection
-            # We use a multi-language locale to enable auto-detection
+            # Create transcription job with Azure language identification enabled
+            # Uses "Single" mode (at-start detection) with configured candidate locales
             random_suffix = ''.join(random.choices(string.ascii_letters + string.digits, k=6))
             job = await transcriber.create_transcription(
                 audio_url=audio_url,
-                locale="en-US",  # Default, but we'll detect from result
-                display_name=f"detect-lang-{random_suffix}"
+                locale=candidate_locales[0] if candidate_locales else "en-US",  # Fallback locale
+                display_name=f"detect-lang-{random_suffix}",
+                candidate_locales=candidate_locales if candidate_locales else None
             )
             job_id_to_cleanup = job.id
-            logger.debug(f"Created language detection transcription job: {job.id}")
+            logger.debug(f"Created language detection transcription job: {job.id} with candidates: {candidate_locales}")
             
             # Wait for completion
             result = await transcriber.wait_for_transcription(job.id)

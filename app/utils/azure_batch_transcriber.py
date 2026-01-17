@@ -306,16 +306,22 @@ class AzureBatchTranscriber:
         display_name: Optional[str] = None,
         word_level_timestamps: bool = True,
         diarization: bool = False,
+        candidate_locales: Optional[List[str]] = None,
     ) -> TranscriptionJob:
         """
         Create a batch transcription job.
         
         Args:
             audio_url: URL to the audio file (must be accessible by Azure).
-            locale: Language locale (e.g., "en-US", "de-DE").
+            locale: Language locale (e.g., "en-US", "de-DE"). Used as fallback when
+                language identification is enabled.
             display_name: Optional display name for the job.
             word_level_timestamps: Enable word-level timing.
             diarization: Enable speaker diarization.
+            candidate_locales: Optional list of candidate locales for language identification.
+                When provided, enables Azure's language identification feature with "Single"
+                mode (at-start detection). Maximum 4 candidates for Single mode.
+                Example: ["en-US", "nl-NL", "es-ES", "fr-FR"]
             
         Returns:
             TranscriptionJob object.
@@ -337,6 +343,16 @@ class AzureBatchTranscriber:
                 "profanityFilterMode": "None"
             }
         }
+        
+        # Add language identification if candidate locales provided
+        if candidate_locales:
+            # Single mode: at-start detection, max 4 candidates
+            # Ideal for movies/TV shows with consistent language throughout
+            payload["languageIdentification"] = {
+                "candidateLocales": candidate_locales[:4],  # Enforce max 4 for Single mode
+                "mode": "Single"
+            }
+            logger.debug(f"Language identification enabled with candidates: {candidate_locales[:4]}")
         
         url = f"{self.api_base_url}/transcriptions"
         logger.debug(f"Creating transcription with URL: {url}")
@@ -419,12 +435,18 @@ class AzureBatchTranscriber:
         # Parse the result into segments
         segments = []
         duration = 0.0
+        detected_locale = None  # Track locale from language identification
         
         for phrase in result_data.get('recognizedPhrases', []):
             # Convert ticks to seconds (1 tick = 100 nanoseconds)
             start_seconds = phrase.get('offsetInTicks', 0) / 10_000_000
             duration_seconds = phrase.get('durationInTicks', 0) / 10_000_000
             end_seconds = start_seconds + duration_seconds
+            
+            # Extract detected locale from first phrase (when language identification enabled)
+            if detected_locale is None and 'locale' in phrase:
+                detected_locale = phrase['locale']
+                logger.debug(f"Detected language from Azure LID: {detected_locale}")
             
             # Get best transcription
             n_best = phrase.get('nBest', [])
@@ -445,12 +467,15 @@ class AzureBatchTranscriber:
             
             duration = max(duration, end_seconds)
         
-        # Get job info for language
+        # Get job info for fallback language
         job = await self.get_transcription_status(job_id)
+        
+        # Use detected locale from language identification if available, otherwise use job locale
+        result_language = detected_locale if detected_locale else job.locale
         
         return TranscriptionResult(
             job_id=job_id,
-            language=job.locale,
+            language=result_language,
             segments=segments,
             duration=duration
         )

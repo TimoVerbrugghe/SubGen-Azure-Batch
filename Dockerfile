@@ -6,7 +6,7 @@ FROM python:3.11-slim
 
 LABEL maintainer="SubGen-Azure-Batch"
 LABEL description="Cloud-based subtitle generator using Azure Batch Transcription API"
-LABEL version="1.0.0"
+LABEL version="1.0.1"
 
 WORKDIR /app
 

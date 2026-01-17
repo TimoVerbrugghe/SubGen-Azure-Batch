@@ -193,6 +193,7 @@ All utility modules are in `app/utils/` and can be imported via `from app.utils 
 | `LIMIT_TO_PREFERRED_AUDIO_LANGUAGE` | `false` | Skip files without preferred audio track |
 | `DETECT_LANGUAGE_LENGTH` | `30` | Detect language on first x seconds of audio |
 | `DETECT_LANGUAGE_OFFSET` | `0` | Start language detection x seconds into file |
+| `LANGUAGE_DETECTION_CANDIDATES` | `en-US,nl-NL,es-ES,fr-FR` | Candidate locales for Azure language identification (max 4, comma-separated). Used by `/detect-language` for Bazarr. |
 | `PUSHOVER_USER_KEY` | `` | Pushover user key for failure notifications |
 | `PUSHOVER_API_TOKEN` | `` | Pushover API token for failure notifications |
 | `NOTIFY_ON_FAILURE` | `true` | Send notification when transcription fails |

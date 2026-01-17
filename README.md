@@ -1,6 +1,6 @@
 # SubGen-Azure-Batch
 
-[![Donate to original subgen project](https://img.shields.io/badge/Donate-PayPal-green.svg)](https://www.paypal.com/donate/?hosted_button_id=SU4QQP6LH5PF6)
+[![Donate to original subgen project](https://img.shields.io/badge/Donate_to_original_SubGen_project-PayPal-green.svg)](https://www.paypal.com/donate/?hosted_button_id=SU4QQP6LH5PF6)
 
 ![SubGen-Azure-Batch Logo](https://raw.githubusercontent.com/TimoVerbrugghe/subgen-azure-batch/main/icon.png "SubGen-Azure-Batch")
 
@@ -204,6 +204,7 @@ The following environment variables are available in Docker. They will default t
 | LIMIT_TO_PREFERRED_AUDIO_LANGUAGE | False | Skip files without audio in preferred languages |
 | DETECT_LANGUAGE_LENGTH | 30 | Detect language on the first X seconds of audio |
 | DETECT_LANGUAGE_OFFSET | 0 | Start language detection X seconds into the file (skip intros) |
+| LANGUAGE_DETECTION_CANDIDATES | 'en-US,nl-NL,es-ES,fr-FR' | **(New)** Candidate locales for Azure language identification (max 4, comma-separated). Used by Bazarr's `/detect-language` endpoint. See [supported locales](https://learn.microsoft.com/azure/ai-services/speech-service/language-support?tabs=stt). |
 | **Subtitle Naming** |   |   |
 | SUBTITLE_LANGUAGE_NAMING_TYPE | 'ISO_639_2_B' | Language format: ISO_639_1, ISO_639_2_T, ISO_639_2_B, NAME, NATIVE |
 | SUBTITLE_LANGUAGE_NAME | '' | Override detected language in filename (e.g., 'aa' to sort higher in Plex) |
@@ -230,7 +231,9 @@ The following environment variables are available in Docker. They will default t
 | `GET /` | Web UI |
 | `GET /health` | Health check |
 | `GET /status` | Returns SubGen-Azure-Batch version |
-| `GET /asr` | Bazarr-compatible ASR endpoint |
+| `POST /asr` | Bazarr-compatible ASR endpoint (returns SRT) |
+| `GET /detect-language` | Language detection endpoint (Bazarr compatibility) |
+| `POST /detect-language` | Language detection with audio upload (uses Azure language identification) |
 | `POST /plex` | Plex webhook |
 | `POST /jellyfin` | Jellyfin webhook |
 | `POST /emby` | Emby webhook |
@@ -262,7 +265,7 @@ The original SubGen project provides local Whisper-based subtitle generation and
 
 **Consider supporting the original project:**
 
-[![Donate to original subgen project](https://img.shields.io/badge/Donate-PayPal-green.svg)](https://www.paypal.com/donate/?hosted_button_id=SU4QQP6LH5PF6)
+[![Donate to original subgen project](https://img.shields.io/badge/Donate_to_original_SubGen_project-PayPal-green.svg)](https://www.paypal.com/donate/?hosted_button_id=SU4QQP6LH5PF6)
 
 **Additional credits:**
 

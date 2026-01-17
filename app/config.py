@@ -151,6 +151,10 @@ class TranscriptionConfig:
     # Based on original subgen.py DETECT_LANGUAGE_OFFSET setting.
     detect_language_offset: int = 0
     
+    # Candidate locales for Azure language identification (max 4 for Single mode)
+    # Used by /detect-language endpoint for Bazarr integration
+    language_detection_candidates: str = "en-US,nl-NL,es-ES,fr-FR"
+    
     @property
     def forced_language(self) -> Optional[str]:
         """Get the forced language, or None if not set."""
@@ -375,6 +379,7 @@ class Settings:
                 limit_to_preferred_audio_languages=get_bool(os.getenv('LIMIT_TO_PREFERRED_AUDIO_LANGUAGE', 'false')),
                 detect_language_length=int(os.getenv('DETECT_LANGUAGE_LENGTH', '30')),
                 detect_language_offset=int(os.getenv('DETECT_LANGUAGE_OFFSET', '0')),
+                language_detection_candidates=os.getenv('LANGUAGE_DETECTION_CANDIDATES', 'en-US,nl-NL,es-ES,fr-FR'),
             ),
             
             # Bazarr configuration
