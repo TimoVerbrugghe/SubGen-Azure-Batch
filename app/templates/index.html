@@ -51,6 +51,29 @@
                 <button id="theme-toggle" class="theme-toggle" title="Toggle theme">
                     <span class="theme-icon">🌙</span>
                 </button>
+                <!-- Mobile status menu toggle -->
+                <button id="status-menu-toggle" class="status-menu-toggle" aria-label="Show status information" aria-expanded="false">
+                    <span class="hamburger-icon">☰</span>
+                </button>
+            </div>
+
+            <!-- Mobile status dropdown -->
+            <div id="status-menu" class="status-menu" role="dialog" aria-label="Status menu">
+                <div id="speech-status-mobile" class="status-badge loading" title="Azure Speech API Key">
+                    <span class="status-icon">🎤</span>
+                    <span class="status-text">Speech API</span>
+                </div>
+                <div id="storage-status-mobile" class="status-badge loading" title="Blob Storage">
+                    <span class="status-icon">📦</span>
+                    <span class="status-text">Blob Storage</span>
+                </div>
+                <div id="notification-status-mobile" class="status-badge loading" title="Pushover Notifications">
+                    <span class="status-icon">🔔</span>
+                    <span class="status-text">Notifications</span>
+                </div>
+                <button id="btn-test-notification-mobile" class="btn btn-small" title="Send test notification" style="display: none;">
+                    Test 🔔
+                </button>
             </div>
         </header>
 

@@ -127,10 +127,71 @@ class SubGenApp {
             this.clearCompletedSessions();
         });
         
-        // Test notification button
+        // Test notification button (desktop + mobile)
         document.getElementById('btn-test-notification')?.addEventListener('click', () => {
             this.sendTestNotification();
         });
+        document.getElementById('btn-test-notification-mobile')?.addEventListener('click', () => {
+            this.sendTestNotification();
+        });
+
+        // Mobile status menu toggle
+        document.getElementById('status-menu-toggle')?.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this.toggleStatusMenu();
+        });
+
+        // Close mobile status menu when clicking outside
+        document.addEventListener('click', (e) => {
+            const menu = document.getElementById('status-menu');
+            const toggle = document.getElementById('status-menu-toggle');
+            if (menu && menu.classList.contains('open') && !menu.contains(e.target) && !toggle.contains(e.target)) {
+                this.closeStatusMenu();
+            }
+        });
+    }
+
+    toggleStatusMenu() {
+        const menu = document.getElementById('status-menu');
+        const toggle = document.getElementById('status-menu-toggle');
+        if (!menu) return;
+        const isOpen = menu.classList.contains('open');
+        if (isOpen) {
+            this.closeStatusMenu();
+        } else {
+            menu.classList.add('open');
+            if (toggle) toggle.setAttribute('aria-expanded', 'true');
+        }
+    }
+
+    closeStatusMenu() {
+        const menu = document.getElementById('status-menu');
+        const toggle = document.getElementById('status-menu-toggle');
+        if (menu) menu.classList.remove('open');
+        if (toggle) toggle.setAttribute('aria-expanded', 'false');
+    }
+
+    /**
+     * Update a status badge by its base ID, syncing both desktop and mobile versions.
+     */
+    updateStatusBadge(baseId, className, title) {
+        for (const id of [baseId, `${baseId}-mobile`]) {
+            const el = document.getElementById(id);
+            if (el) {
+                el.className = className;
+                el.title = title;
+            }
+        }
+    }
+
+    /**
+     * Show or hide the test notification button on both desktop and mobile.
+     */
+    updateTestButton(show) {
+        for (const id of ['btn-test-notification', 'btn-test-notification-mobile']) {
+            const el = document.getElementById(id);
+            if (el) el.style.display = show ? 'inline-block' : 'none';
+        }
     }
     
     async checkConfig() {
@@ -140,33 +201,21 @@ class SubGenApp {
             const status = await statusResponse.json();
             
             // Update Speech status badge
-            const speechBadge = document.getElementById('speech-status');
-            if (speechBadge) {
-                if (!status.speech.configured) {
-                    speechBadge.className = 'status-badge warning';
-                    speechBadge.title = 'Azure Speech: Not configured';
-                } else if (status.speech.connected) {
-                    speechBadge.className = 'status-badge ok';
-                    speechBadge.title = 'Azure Speech: Connected';
-                } else {
-                    speechBadge.className = 'status-badge error';
-                    speechBadge.title = `Azure Speech: ${status.speech.error || 'Connection failed'}`;
-                }
+            if (!status.speech.configured) {
+                this.updateStatusBadge('speech-status', 'status-badge warning', 'Azure Speech: Not configured');
+            } else if (status.speech.connected) {
+                this.updateStatusBadge('speech-status', 'status-badge ok', 'Azure Speech: Connected');
+            } else {
+                this.updateStatusBadge('speech-status', 'status-badge error', `Azure Speech: ${status.speech.error || 'Connection failed'}`);
             }
             
             // Update Storage status badge
-            const storageBadge = document.getElementById('storage-status');
-            if (storageBadge) {
-                if (!status.storage.configured) {
-                    storageBadge.className = 'status-badge warning';
-                    storageBadge.title = 'Azure Storage: Not configured';
-                } else if (status.storage.connected) {
-                    storageBadge.className = 'status-badge ok';
-                    storageBadge.title = 'Azure Storage: Connected';
-                } else {
-                    storageBadge.className = 'status-badge error';
-                    storageBadge.title = `Azure Storage: ${status.storage.error || 'Connection failed'}`;
-                }
+            if (!status.storage.configured) {
+                this.updateStatusBadge('storage-status', 'status-badge warning', 'Azure Storage: Not configured');
+            } else if (status.storage.connected) {
+                this.updateStatusBadge('storage-status', 'status-badge ok', 'Azure Storage: Connected');
+            } else {
+                this.updateStatusBadge('storage-status', 'status-badge error', `Azure Storage: ${status.storage.error || 'Connection failed'}`);
             }
             
             // Get config for integrations
@@ -198,57 +247,28 @@ class SubGenApp {
             
         } catch (error) {
             console.error('Failed to check config:', error);
-            const speechBadge = document.getElementById('speech-status');
-            const storageBadge = document.getElementById('storage-status');
-            const notificationBadge = document.getElementById('notification-status');
-            if (speechBadge) {
-                speechBadge.className = 'status-badge error';
-                speechBadge.title = 'Connection Error';
-            }
-            if (storageBadge) {
-                storageBadge.className = 'status-badge error';
-                storageBadge.title = 'Connection Error';
-            }
-            if (notificationBadge) {
-                notificationBadge.className = 'status-badge warning';
-                notificationBadge.title = 'Notifications: Unknown';
-            }
+            this.updateStatusBadge('speech-status', 'status-badge error', 'Connection Error');
+            this.updateStatusBadge('storage-status', 'status-badge error', 'Connection Error');
+            this.updateStatusBadge('notification-status', 'status-badge warning', 'Notifications: Unknown');
         }
     }
     
     async checkNotificationConfig() {
-        const notificationBadge = document.getElementById('notification-status');
-        const testButton = document.getElementById('btn-test-notification');
-        
         try {
             const response = await fetch('/api/notifications/config');
             const config = await response.json();
             
-            if (notificationBadge) {
-                if (config.pushover_configured) {
-                    notificationBadge.className = 'status-badge ok';
-                    notificationBadge.title = 'Pushover: Configured';
-                    // Show test button when notifications are configured
-                    if (testButton) {
-                        testButton.style.display = 'inline-block';
-                    }
-                } else {
-                    notificationBadge.className = 'status-badge warning';
-                    notificationBadge.title = 'Pushover: Not configured';
-                    if (testButton) {
-                        testButton.style.display = 'none';
-                    }
-                }
+            if (config.pushover_configured) {
+                this.updateStatusBadge('notification-status', 'status-badge ok', 'Pushover: Configured');
+                this.updateTestButton(true);
+            } else {
+                this.updateStatusBadge('notification-status', 'status-badge warning', 'Pushover: Not configured');
+                this.updateTestButton(false);
             }
         } catch (error) {
             console.error('Failed to check notification config:', error);
-            if (notificationBadge) {
-                notificationBadge.className = 'status-badge warning';
-                notificationBadge.title = 'Notifications: Unknown';
-            }
-            if (testButton) {
-                testButton.style.display = 'none';
-            }
+            this.updateStatusBadge('notification-status', 'status-badge warning', 'Notifications: Unknown');
+            this.updateTestButton(false);
         }
     }
     

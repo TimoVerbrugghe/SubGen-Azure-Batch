@@ -908,6 +908,58 @@ body {
     background: #2a5a8a;
 }
 
+/* Mobile Status Menu Toggle Button */
+.status-menu-toggle {
+    display: none;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    width: 40px;
+    height: 40px;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: var(--transition-fast);
+    margin-left: 8px;
+    flex-shrink: 0;
+}
+
+.status-menu-toggle:hover {
+    background: var(--bg-hover);
+}
+
+.hamburger-icon {
+    font-size: 1.2rem;
+    color: var(--text-primary);
+}
+
+/* Mobile Status Dropdown Menu */
+.status-menu {
+    display: none;
+    position: absolute;
+    top: var(--header-height);
+    right: 0;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-top: none;
+    border-radius: 0 0 var(--border-radius) var(--border-radius);
+    box-shadow: var(--shadow);
+    padding: 12px;
+    flex-direction: column;
+    gap: 8px;
+    z-index: 100;
+    min-width: 200px;
+}
+
+.status-menu.open {
+    display: flex;
+}
+
+.status-menu .status-badge {
+    width: 100%;
+    justify-content: flex-start;
+}
+
 /* Responsive Design */
 @media (max-width: 900px) {
     .main-content {
@@ -929,10 +981,25 @@ body {
 }
 
 @media (max-width: 600px) {
+    .header {
+        position: relative;
+    }
+
     .header h1 {
         font-size: 1.2rem;
     }
-    
+
+    /* Hide the desktop status badges */
+    .header-right .status-badge,
+    .header-right .btn-small {
+        display: none;
+    }
+
+    /* Show the hamburger toggle */
+    .status-menu-toggle {
+        display: flex;
+    }
+
     .button-group {
         flex-direction: column;
     }
