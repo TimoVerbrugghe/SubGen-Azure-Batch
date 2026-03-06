@@ -149,6 +149,13 @@ class SubGenApp {
                 this.closeStatusMenu();
             }
         });
+
+        // Close mobile status menu when returning to desktop widths
+        window.addEventListener('resize', () => {
+            if (window.innerWidth > 900) {
+                this.closeStatusMenu();
+            }
+        });
     }
 
     toggleStatusMenu() {

@@ -90,6 +90,7 @@ body {
     align-items: center;
     justify-content: space-between;
     padding: 0 20px;
+    position: relative;
 }
 
 .header-left {
@@ -141,6 +142,8 @@ body {
 .header-right {
     display: flex;
     gap: 8px;
+    align-items: center;
+    flex-wrap: nowrap;
 }
 
 .status-badge {
@@ -938,7 +941,7 @@ body {
     display: none;
     position: absolute;
     top: var(--header-height);
-    right: 0;
+    right: 12px;
     background: var(--bg-secondary);
     border: 1px solid var(--border-color);
     border-top: none;
@@ -949,6 +952,7 @@ body {
     gap: 8px;
     z-index: 100;
     min-width: 200px;
+    max-width: calc(100vw - 24px);
 }
 
 .status-menu.open {
@@ -980,7 +984,7 @@ body {
     }
 }
 
-@media (max-width: 600px) {
+@media (max-width: 900px) {
     .header {
         position: relative;
     }
@@ -992,12 +996,12 @@ body {
     /* Hide the desktop status badges */
     .header-right .status-badge,
     .header-right .btn-small {
-        display: none;
+        display: none !important;
     }
 
     /* Show the hamburger toggle */
     .status-menu-toggle {
-        display: flex;
+        display: flex !important;
     }
 
     .button-group {
@@ -1006,5 +1010,15 @@ body {
     
     .btn {
         width: 100%;
+    }
+}
+
+@media (min-width: 901px) {
+    .status-menu {
+        display: none !important;
+    }
+
+    .status-menu-toggle {
+        display: none !important;
     }
 }
