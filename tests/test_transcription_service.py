@@ -425,6 +425,13 @@ class TestTranscriptionServiceHelpers:
         locale = TranscriptionService._get_azure_locale("fr")
         assert locale == "fr-FR"
 
+    def test_get_azure_locale_preserves_explicit_locale(self):
+        """Test that explicit locale values are not remapped."""
+        from app.transcription_service import TranscriptionService
+
+        locale = TranscriptionService._get_azure_locale("en-AU")
+        assert locale == "en-AU"
+
 
 class TestTranscriptionServiceConcurrency:
     """Test global transcription concurrency control with priority queue."""

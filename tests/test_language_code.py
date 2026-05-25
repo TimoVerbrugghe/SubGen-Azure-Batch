@@ -166,6 +166,13 @@ class TestFromString:
         
         assert LanguageCode.from_string("  en  ") == LanguageCode.ENGLISH
         assert LanguageCode.from_string("\tde\n") == LanguageCode.GERMAN
+
+    def test_locale_format_strings(self):
+        """Test locale-formatted inputs map to base language."""
+        from app.utils.language_code import LanguageCode
+
+        assert LanguageCode.from_string("en-AU") == LanguageCode.ENGLISH
+        assert LanguageCode.from_string("fr-CA") == LanguageCode.FRENCH
     
     def test_none_input(self):
         """Test handling of None input."""

@@ -735,14 +735,14 @@ class TranscriptionService:
     @classmethod
     def _get_azure_locale(cls, language: str) -> str:
         """Convert language code to Azure locale."""
+        # If already in locale form (e.g., en-AU), preserve it as-is.
+        if '-' in language:
+            return language
+
         # First try LanguageCode enum
         lang_code = LanguageCode.from_string(language)
         if lang_code != LanguageCode.NONE:
             return lang_code.to_azure_locale()
-        
-        # Check if already a locale
-        if '-' in language:
-            return language
         
         # Map simple codes to locales
         default_regions = {

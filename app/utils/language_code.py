@@ -149,6 +149,9 @@ class LanguageCode(Enum):
         if value is None:
             return LanguageCode.NONE
         value = value.strip().lower()
+        # Accept locale-style strings (e.g., en-AU) by matching their base language.
+        if '-' in value:
+            value = value.split('-', 1)[0]
         for lang in LanguageCode:
             if lang is LanguageCode.NONE:
                 continue
