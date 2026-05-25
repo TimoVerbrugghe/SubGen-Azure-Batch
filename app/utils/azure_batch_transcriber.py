@@ -366,7 +366,7 @@ class AzureBatchTranscriber:
             
             data = await response.json()
             job = TranscriptionJob.from_api_response(data)
-            logger.info(f"Created transcription job: {job.id}")
+            logger.info(f"Created transcription job: {job.id} (locale={job.locale})")
             return job
     
     async def get_transcription_status(self, job_id: str) -> TranscriptionJob:

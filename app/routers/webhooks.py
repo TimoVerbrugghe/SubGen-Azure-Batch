@@ -130,7 +130,7 @@ async def process_media_file(
                 locale=azure_locale,
                 display_name=f"webhook-{path.stem}"
             )
-            logger.info(f"Created transcription job: {job.id}")
+            logger.info(f"Created transcription job: {job.id} (locale={job.locale})")
             
             # Wait for transcription
             result = await transcriber.wait_for_transcription(job.id)

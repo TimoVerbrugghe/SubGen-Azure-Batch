@@ -445,7 +445,10 @@ class TranscriptionService:
                     display_name=f"{source.value}-{Path(file_name).stem if file_name != 'unknown' else job.id}"
                 )
                 job.azure_job_id = azure_job.id
-                logger.info(f"[Session {session.id}] [{job.id}] Created Azure transcription: {azure_job.id}")
+                logger.info(
+                    f"[Session {session.id}] [{job.id}] Created Azure transcription: "
+                    f"{azure_job.id} (locale={azure_job.locale})"
+                )
                 
                 # Wait for completion with periodic logging
                 result = await cls._wait_for_transcription_with_logging(
@@ -589,7 +592,7 @@ class TranscriptionService:
                     display_name=f"batch-{Path(file_path).stem}"
                 )
                 job.azure_job_id = azure_job.id
-                logger.info(f"[{job.id}] Created Azure job: {azure_job.id}")
+                logger.info(f"[{job.id}] Created Azure job: {azure_job.id} (locale={azure_job.locale})")
                 
                 result = await cls._wait_for_transcription_with_logging(
                     transcriber, azure_job.id, job
