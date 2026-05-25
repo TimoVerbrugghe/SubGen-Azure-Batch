@@ -1,6 +1,7 @@
 # SubGen-Azure-Batch
 
 [![Donate to original subgen project](https://img.shields.io/badge/Donate_to_original_SubGen_project-PayPal-green.svg)](https://www.paypal.com/donate/?hosted_button_id=SU4QQP6LH5PF6)
+[![AI Ready](https://img.shields.io/badge/AI--Ready-yes-brightgreen?style=flat)](https://github.com/johnpapa/ai-ready)
 
 ![SubGen-Azure-Batch Logo](https://raw.githubusercontent.com/TimoVerbrugghe/subgen-azure-batch/main/icon.png "SubGen-Azure-Batch")
 
@@ -252,6 +253,21 @@ Common languages:
 - Japanese (ja), Chinese (zh), Korean (ko)
 - Portuguese (pt), Italian (it), Russian (ru)
 - And many more...
+
+## Contributing
+
+Contributions are welcome! To get started:
+
+1. Fork the repository
+2. Create a feature branch: `git checkout -b feat/your-feature`
+3. Make your changes
+4. Run the tests: `pytest tests/ -v --tb=short -m "not azure_api and not integration and not slow"`
+5. Run the linter: `ruff check app/ tests/ && ruff format --check app/ tests/`
+6. Open a pull request targeting `main`
+
+See `AGENTS.md` for architecture conventions and `tests/conftest.py` for test fixture documentation.
+
+> **Note:** Azure API tests (`@pytest.mark.azure_api`) require real Azure credentials and are excluded from CI. Copy `tests/.env.example` to `tests/.env` to run them locally.
 
 ## License
 
