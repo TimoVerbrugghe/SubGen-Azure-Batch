@@ -179,9 +179,11 @@ The following environment variables are available in Docker. They will default t
 | MEDIA_FOLDERS | '/tv,/movies' | **(New)** Comma-separated list of paths to show in the Web UI file browser |
 | SUBTITLE_LANGUAGE | '' | Default subtitle language code (leave empty for auto-detect) |
 | **Processing Settings** |   |   |
-| CONCURRENT_TRANSCRIPTIONS | 50 | **(Changed)** Global limit for parallel transcription jobs. Enforced across all sources (UI batch, Bazarr, webhooks). Bazarr requests get priority over batch jobs. |
-| TRANSCODE_DIR | '/transcode' | **(New)** Directory for temp audio files. Mount a volume here to reduce memory usage during batch processing |
-| JOB_POLL_INTERVAL | 10 | **(New)** Seconds between polling Azure for job status |
+| CONCURRENT_TRANSCRIPTIONS | 20 | Global limit for parallel transcription jobs. Enforced across all sources (UI batch, Bazarr, webhooks). Bazarr requests get priority over batch jobs. |
+| TRANSCODE_DIR | '/transcode' | Directory for temp audio files. Mount a volume here to reduce memory usage during batch processing |
+| JOB_POLL_INTERVAL | 30 | Seconds between polling Azure for job status. Azure recommends no more than once per minute. |
+| TRANSCRIPTION_TIMEOUT | 3600 | Maximum seconds to wait for a transcription job before giving up. Combined with JOB_POLL_INTERVAL to determine how many polls are attempted. |
+| MAX_CONCURRENT_UPLOADS | 2 | Maximum parallel blob uploads. Keep low to avoid Azure storage write-timeout errors under throttling. |
 | PROCESS_ADDED_MEDIA | False | Process media when added to library (requires webhook integration) |
 | PROCESS_MEDIA_ON_PLAY | False | Process media when played (requires webhook integration) |
 | **Path Mapping** |   |   |
