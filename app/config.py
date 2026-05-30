@@ -305,6 +305,7 @@ class Settings:
 
     # Processing settings
     concurrent_transcriptions: int = 20
+    max_concurrent_extractions: int = 3  # parallel ffmpeg audio extraction processes; kept low to avoid CPU saturation
     job_poll_interval: int = 30  # seconds between Azure status polls
     transcription_timeout: int = 3600  # seconds before giving up on a job
     max_concurrent_uploads: int = 2  # parallel blob uploads at any one time
@@ -348,6 +349,7 @@ class Settings:
             subtitle_language=os.getenv("SUBTITLE_LANGUAGE", ""),
             # Processing settings
             concurrent_transcriptions=int(os.getenv("CONCURRENT_TRANSCRIPTIONS", "20")),
+            max_concurrent_extractions=int(os.getenv("MAX_CONCURRENT_EXTRACTIONS", "3")),
             job_poll_interval=int(os.getenv("JOB_POLL_INTERVAL", "30")),
             transcription_timeout=int(os.getenv("TRANSCRIPTION_TIMEOUT", "3600")),
             max_concurrent_uploads=int(os.getenv("MAX_CONCURRENT_UPLOADS", "2")),
