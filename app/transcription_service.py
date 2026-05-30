@@ -174,6 +174,14 @@ class TranscriptionService:
     _upload_semaphore: Optional[asyncio.Semaphore] = None
     _MAX_CONCURRENT_UPLOADS = 2  # fallback used only before settings are loaded
 
+    # Limit concurrent audio extractions (ffmpeg processes).  Running many ffmpeg
+    # processes in parallel saturates the pod's CPU budget and starves the asyncio
+    # event loop, making the /health endpoint unresponsive under heavy batch load.
+    # MAX_CONCURRENT_EXTRACTIONS (default 3) is intentionally much lower than
+    # CONCURRENT_TRANSCRIPTIONS so the remaining in-flight jobs are in the cheap
+    # Azure-polling phase (mostly asyncio.sleep) rather than doing CPU-heavy work.
+    _extraction_semaphore: Optional[asyncio.Semaphore] = None
+
     # Global transcription concurrency limit (enforced across all sessions)
     # This ensures we don't exceed Azure API limits regardless of how many
     # batch sessions or Bazarr requests are running
@@ -181,6 +189,17 @@ class TranscriptionService:
     _transcription_lock = asyncio.Lock()  # Lock for priority queue operations
     _priority_waiters: List[asyncio.Event] = []  # High-priority (Bazarr) waiters
     _normal_waiters: List[asyncio.Event] = []  # Normal priority (UI batch) waiters
+
+    @classmethod
+    def _get_extraction_semaphore(cls) -> asyncio.Semaphore:
+        """Get or create the audio-extraction semaphore (lazily initialized for event loop)."""
+        if cls._extraction_semaphore is None:
+            limit = get_settings().max_concurrent_extractions
+            cls._extraction_semaphore = asyncio.Semaphore(limit)
+            logger.info(
+                f"Initialized extraction semaphore with limit {limit}"
+            )
+        return cls._extraction_semaphore
 
     @classmethod
     def _get_upload_semaphore(cls) -> asyncio.Semaphore:
@@ -596,9 +615,18 @@ class TranscriptionService:
             job = await cls.add_job(session.id, file_path, language, source)
 
         try:
-            # Extract audio
+            # Extract audio - hold the extraction semaphore only while ffmpeg runs.
+            # This keeps the number of concurrent ffmpeg processes bounded regardless
+            # of how many jobs are in-flight, preventing CPU saturation that would
+            # otherwise starve the asyncio event loop (and the /health endpoint).
             await cls.update_job_status(session.id, job.id, JobStatus.EXTRACTING)
-            audio_path = await extract_audio(file_path, output_format="ogg")
+            extraction_semaphore = cls._get_extraction_semaphore()
+            if extraction_semaphore.locked():
+                logger.debug(
+                    f"[{job.id}] Waiting for extraction slot"
+                )
+            async with extraction_semaphore:
+                audio_path = await extract_audio(file_path, output_format="ogg")
             logger.info(f"[{job.id}] Extracted audio: {audio_path}")
 
             # Convert language
