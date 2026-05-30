@@ -801,7 +801,7 @@ class TranscriptionService:
         if poll_count >= max_polls:
             raise Exception("Transcription timed out")
 
-        return await transcriber.get_transcription_result(azure_job_id)
+        return await transcriber.get_transcription_result(azure_job_id, fallback_locale=azure_job.locale)
 
     @classmethod
     async def _convert_to_ogg(cls, input_path: str, output_path: str):
