@@ -13,7 +13,6 @@ import json
 import logging
 import os
 from dataclasses import dataclass
-from pathlib import Path
 from typing import List, Optional, Tuple
 
 from app.config import SkipConfig, get_settings
@@ -205,7 +204,8 @@ def find_external_subtitles(media_path: str) -> List[Tuple[str, str, bool]]:
 def has_external_subtitle_for_language(
     media_path: str,
     language: str,
-    only_subgen: bool = False
+    only_subgen: bool = False,
+    cached_subtitles: Optional[List[Tuple[str, str, bool]]] = None,
 ) -> bool:
     """
     Check if an external subtitle exists for a specific language.
@@ -214,6 +214,8 @@ def has_external_subtitle_for_language(
         media_path: Path to the media file.
         language: Language code to check (2 or 3 letter).
         only_subgen: Only consider subtitles created by SubGen.
+        cached_subtitles: Pre-computed result of find_external_subtitles() to avoid
+            redundant directory scans when multiple checks share the same file.
         
     Returns:
         True if matching subtitle exists.
@@ -223,8 +225,9 @@ def has_external_subtitle_for_language(
         target_lang = LanguageCode.from_string(language)
     except (ValueError, AttributeError):
         target_lang = None
-    
-    for sub_path, sub_lang, is_subgen in find_external_subtitles(media_path):
+
+    subtitles = cached_subtitles if cached_subtitles is not None else find_external_subtitles(media_path)
+    for sub_path, sub_lang, is_subgen in subtitles:
         # If only checking subgen subtitles, skip non-subgen
         if only_subgen and not is_subgen:
             continue
@@ -244,18 +247,24 @@ def has_external_subtitle_for_language(
     return False
 
 
-def has_any_external_subtitle(media_path: str, only_subgen: bool = False) -> bool:
+def has_any_external_subtitle(
+    media_path: str,
+    only_subgen: bool = False,
+    cached_subtitles: Optional[List[Tuple[str, str, bool]]] = None,
+) -> bool:
     """
     Check if any external subtitle exists for a media file.
     
     Args:
         media_path: Path to the media file.
         only_subgen: Only consider subtitles created by SubGen.
+        cached_subtitles: Pre-computed result of find_external_subtitles() to avoid
+            redundant directory scans when multiple checks share the same file.
         
     Returns:
         True if any subtitle exists.
     """
-    subtitles = find_external_subtitles(media_path)
+    subtitles = cached_subtitles if cached_subtitles is not None else find_external_subtitles(media_path)
     if only_subgen:
         return any(is_subgen for _, _, is_subgen in subtitles)
     return len(subtitles) > 0
@@ -417,8 +426,9 @@ async def should_skip_file(
     Returns:
         SkipResult indicating whether to skip and why.
     """
+    settings = get_settings()
     if skip_config is None:
-        skip_config = get_settings().skip
+        skip_config = settings.skip
     
     base_name = os.path.basename(media_path)
     
@@ -426,12 +436,19 @@ async def should_skip_file(
     if not os.path.exists(media_path):
         return SkipResult.skip(f"File not found: {base_name}")
     
+    # Pre-compute external subtitles once if either external-subtitle check is
+    # enabled, so both checks 1 and 2 share a single os.listdir scan (item 2).
+    cached_ext_subs = None
+    if skip_config.skip_if_target_subtitles_exist or skip_config.skip_if_external_subtitles_exist:
+        cached_ext_subs = find_external_subtitles(media_path)
+
     # 1. Skip if target language subtitle already exists
     if skip_config.skip_if_target_subtitles_exist:
         if has_external_subtitle_for_language(
             media_path, 
             target_language, 
-            only_subgen=skip_config.skip_only_subgen_subtitles
+            only_subgen=skip_config.skip_only_subgen_subtitles,
+            cached_subtitles=cached_ext_subs,
         ):
             return SkipResult.skip(
                 f"Subtitle already exists for language '{target_language}'"
@@ -441,17 +458,25 @@ async def should_skip_file(
     if skip_config.skip_if_external_subtitles_exist:
         if has_any_external_subtitle(
             media_path,
-            only_subgen=skip_config.skip_only_subgen_subtitles
+            only_subgen=skip_config.skip_only_subgen_subtitles,
+            cached_subtitles=cached_ext_subs,
         ):
             return SkipResult.skip("External subtitles already exist")
     
-    # 3. Stream-based checks (internal subtitles, audio language, subtitle languages)
-    # Get stream info once for all checks that need it
+    # 3. Stream-based checks (internal subtitles, audio language, subtitle languages,
+    #    preferred audio language).  Fetch stream info once for all checks that need it.
     internal_lang = skip_config.internal_subtitle_language
     audio_skip_list = skip_config.audio_language_skip_list
     subtitle_skip_list = skip_config.subtitle_languages_skip_list
     
-    needs_stream_info = internal_lang or audio_skip_list or subtitle_skip_list
+    needs_stream_info = (
+        internal_lang
+        or audio_skip_list
+        or subtitle_skip_list
+        or skip_config.skip_unknown_language
+        or skip_config.skip_if_no_language_but_subtitles_exist
+        or settings.transcription.limit_to_preferred_audio_languages
+    )
     stream_info = None
     
     if needs_stream_info:
@@ -506,20 +531,26 @@ async def should_skip_file(
                     return SkipResult.skip(
                         "No audio language set but subtitles already exist"
                     )
-    
-    # 4. Check preferred audio language (LIMIT_TO_PREFERRED_AUDIO_LANGUAGE)
-    settings = get_settings()
-    if settings.transcription.limit_to_preferred_audio_languages:
-        preferred_langs = settings.transcription.preferred_audio_languages_list
-        if preferred_langs:
-            from app.utils.audio_extractor import (
-                get_audio_tracks, has_preferred_audio_language)
-            audio_tracks = await get_audio_tracks(media_path)
-            if audio_tracks and not has_preferred_audio_language(audio_tracks, preferred_langs):
-                preferred_names = ', '.join(preferred_langs)
-                return SkipResult.skip(
-                    f"No audio track in preferred languages ({preferred_names})"
-                )
+        
+        # 4. Check preferred audio language (LIMIT_TO_PREFERRED_AUDIO_LANGUAGE).
+        # Reuse stream_info audio tracks instead of spawning a second ffprobe process
+        # (item 3).  Empty language strings are normalized to 'und' before the check:
+        # has_preferred_audio_language uses `pref_lang.startswith(track_lang)`, and
+        # `pref_lang.startswith('')` is always True, which would cause every preferred
+        # language to falsely match an untagged track.
+        if settings.transcription.limit_to_preferred_audio_languages:
+            preferred_langs = settings.transcription.preferred_audio_languages_list
+            if preferred_langs:
+                from app.utils.audio_extractor import has_preferred_audio_language
+                audio_tracks = [
+                    {**s, 'language': s.get('language') or 'und'}
+                    for s in stream_info.get('audio', [])
+                ]
+                if audio_tracks and not has_preferred_audio_language(audio_tracks, preferred_langs):
+                    preferred_names = ', '.join(preferred_langs)
+                    return SkipResult.skip(
+                        f"No audio track in preferred languages ({preferred_names})"
+                    )
     
     # No skip conditions met
     logger.debug(f"No skip conditions met for {base_name}")
@@ -545,8 +576,10 @@ async def check_batch_files(
     files_to_process = []
     skipped_files = []
     
-    for file_path in file_paths:
-        result = await should_skip_file(file_path, target_language, skip_config)
+    results = await asyncio.gather(
+        *[should_skip_file(fp, target_language, skip_config) for fp in file_paths]
+    )
+    for file_path, result in zip(file_paths, results):
         if result.should_skip:
             skipped_files.append((file_path, result.reason or "Unknown reason"))
             logger.info(f"Skipping {os.path.basename(file_path)}: {result.reason}")

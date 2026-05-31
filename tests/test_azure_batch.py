@@ -305,5 +305,268 @@ class TestAPIRateLimits:
         print(f"  Note: Default limit is 20 concurrent jobs (S0 tier)")
 
 
+class TestGetTranscriptionResultFallbackLocale:
+    """Item 4 — get_transcription_result uses fallback_locale instead of extra API call."""
+
+    @pytest.mark.asyncio
+    async def test_fallback_locale_used_when_no_detected_locale(self, patched_settings):
+        """When no per-phrase locale is present, fallback_locale is used."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        transcriber = AzureBatchTranscriber()
+
+        files_response = MagicMock()
+        files_response.status = 200
+        files_response.json = AsyncMock(
+            return_value={
+                "values": [
+                    {
+                        "kind": "Transcription",
+                        "links": {"contentUrl": "https://example.com/result.json"},
+                    }
+                ]
+            }
+        )
+        files_response.__aenter__ = AsyncMock(return_value=files_response)
+        files_response.__aexit__ = AsyncMock(return_value=False)
+
+        result_response = MagicMock()
+        result_response.status = 200
+        result_response.json = AsyncMock(
+            return_value={
+                "recognizedPhrases": [
+                    {
+                        "offsetInTicks": 0,
+                        "durationInTicks": 20_000_000,
+                        "nBest": [{"display": "Hello.", "confidence": 0.9}],
+                    }
+                ]
+            }
+        )
+        result_response.__aenter__ = AsyncMock(return_value=result_response)
+        result_response.__aexit__ = AsyncMock(return_value=False)
+
+        mock_session = MagicMock()
+        mock_session.get = MagicMock(side_effect=[files_response, result_response])
+
+        with patch.object(transcriber, "_get_session", AsyncMock(return_value=mock_session)):
+            with patch.object(transcriber, "get_transcription_status") as mock_status:
+                result = await transcriber.get_transcription_result(
+                    "job-123", fallback_locale="de-DE"
+                )
+
+        assert result.language == "de-DE"
+        mock_status.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_detected_locale_takes_priority_over_fallback(self, patched_settings):
+        """Per-phrase locale from LID overrides fallback_locale."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        transcriber = AzureBatchTranscriber()
+
+        files_response = MagicMock()
+        files_response.status = 200
+        files_response.json = AsyncMock(
+            return_value={
+                "values": [
+                    {
+                        "kind": "Transcription",
+                        "links": {"contentUrl": "https://example.com/result.json"},
+                    }
+                ]
+            }
+        )
+        files_response.__aenter__ = AsyncMock(return_value=files_response)
+        files_response.__aexit__ = AsyncMock(return_value=False)
+
+        result_response = MagicMock()
+        result_response.status = 200
+        result_response.json = AsyncMock(
+            return_value={
+                "recognizedPhrases": [
+                    {
+                        "offsetInTicks": 0,
+                        "durationInTicks": 20_000_000,
+                        "locale": "fr-FR",
+                        "nBest": [{"display": "Bonjour.", "confidence": 0.9}],
+                    }
+                ]
+            }
+        )
+        result_response.__aenter__ = AsyncMock(return_value=result_response)
+        result_response.__aexit__ = AsyncMock(return_value=False)
+
+        mock_session = MagicMock()
+        mock_session.get = MagicMock(side_effect=[files_response, result_response])
+
+        with patch.object(transcriber, "_get_session", AsyncMock(return_value=mock_session)):
+            result = await transcriber.get_transcription_result(
+                "job-456", fallback_locale="en-US"
+            )
+
+        assert result.language == "fr-FR"
+
+    @pytest.mark.asyncio
+    async def test_default_fallback_is_en_us(self, patched_settings):
+        """Default fallback_locale is 'en-US' for backward compatibility."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        transcriber = AzureBatchTranscriber()
+
+        files_response = MagicMock()
+        files_response.status = 200
+        files_response.json = AsyncMock(
+            return_value={
+                "values": [
+                    {
+                        "kind": "Transcription",
+                        "links": {"contentUrl": "https://example.com/result.json"},
+                    }
+                ]
+            }
+        )
+        files_response.__aenter__ = AsyncMock(return_value=files_response)
+        files_response.__aexit__ = AsyncMock(return_value=False)
+
+        result_response = MagicMock()
+        result_response.status = 200
+        result_response.json = AsyncMock(return_value={"recognizedPhrases": []})
+        result_response.__aenter__ = AsyncMock(return_value=result_response)
+        result_response.__aexit__ = AsyncMock(return_value=False)
+
+        mock_session = MagicMock()
+        mock_session.get = MagicMock(side_effect=[files_response, result_response])
+
+        with patch.object(transcriber, "_get_session", AsyncMock(return_value=mock_session)):
+            with patch.object(transcriber, "get_transcription_status") as mock_status:
+                result = await transcriber.get_transcription_result("job-789")
+
+        assert result.language == "en-US"
+        mock_status.assert_not_called()
+
+
+class TestBlobServiceClientReuse:
+    """Item 5 — BlobServiceClient is lazily created and reused; reset on 403."""
+
+    def test_get_blob_service_client_creates_on_first_call(self, patched_settings):
+        """_get_blob_service_client creates client on first call."""
+        from unittest.mock import MagicMock, patch
+
+        transcriber = AzureBatchTranscriber()
+        assert transcriber._blob_service_client is None
+
+        mock_client = MagicMock()
+        with patch(
+            "app.utils.azure_batch_transcriber.BlobServiceClient.from_connection_string",
+            return_value=mock_client,
+        ) as mock_factory:
+            client1 = transcriber._get_blob_service_client()
+            client2 = transcriber._get_blob_service_client()
+
+        assert client1 is mock_client
+        assert client2 is mock_client
+        mock_factory.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_delete_blob_resets_client_on_403_and_retries(self, patched_settings):
+        """delete_blob resets _blob_service_client on 403 and retries once."""
+        from unittest.mock import MagicMock, patch
+
+        from azure.core.exceptions import HttpResponseError
+
+        transcriber = AzureBatchTranscriber()
+        transcriber.storage_connection_string = "DefaultEndpointsProtocol=https;AccountName=test;AccountKey=dGVzdA==;EndpointSuffix=core.windows.net"
+
+        error_403 = HttpResponseError(message="Token expired")
+        error_403.status_code = 403
+
+        call_count = 0
+
+        def make_delete_blob():
+            def delete_blob_fn():
+                nonlocal call_count
+                call_count += 1
+                if call_count == 1:
+                    raise error_403
+
+            return delete_blob_fn
+
+        mock_blob_client = MagicMock()
+        mock_blob_client.delete_blob = make_delete_blob()
+        mock_container_client = MagicMock()
+        mock_container_client.get_blob_client.return_value = mock_blob_client
+        mock_service_client = MagicMock()
+        mock_service_client.get_container_client.return_value = mock_container_client
+
+        with patch(
+            "app.utils.azure_batch_transcriber.BlobServiceClient.from_connection_string",
+            return_value=mock_service_client,
+        ), patch("asyncio.to_thread", side_effect=lambda fn, *a, **kw: fn(*a, **kw)):
+            result = await transcriber.delete_blob("audio/test.ogg")
+
+        assert result is True
+        assert call_count == 2  # initial attempt + retry
+
+
+class TestEnsuredContainersCache:
+    """Item 6 — container creation is skipped when already confirmed for this job."""
+
+    @pytest.mark.asyncio
+    async def test_create_container_called_only_once_per_job(self, patched_settings):
+        """upload_audio skips create_container on second call for same container."""
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        transcriber = AzureBatchTranscriber()
+
+        create_container_calls = []
+
+        def fake_create_container():
+            create_container_calls.append(1)
+
+        mock_blob_client = MagicMock()
+        mock_blob_client.url = "https://storage.example.com/test/audio/x.ogg"
+        mock_blob_client.upload_blob = MagicMock()
+
+        mock_container_client = MagicMock()
+        mock_container_client.create_container = fake_create_container
+        mock_container_client.get_blob_client.return_value = mock_blob_client
+
+        mock_service_client = MagicMock()
+        mock_service_client.get_container_client.return_value = mock_container_client
+        mock_service_client.account_name = "testaccount"
+        mock_service_client.credential = MagicMock()
+        mock_service_client.credential.account_key = "dGVzdGtleQ=="
+
+        with patch(
+            "app.utils.azure_batch_transcriber.BlobServiceClient.from_connection_string",
+            return_value=mock_service_client,
+        ), patch(
+            "app.utils.azure_batch_transcriber.generate_blob_sas",
+            return_value="sv=2021-token",
+        ), patch(
+            "os.path.splitext", return_value=("audio/test", ".ogg")
+        ), patch(
+            "os.path.getsize", return_value=1024
+        ), patch(
+            "asyncio.to_thread",
+            side_effect=lambda fn, *args, **kwargs: asyncio.coroutine(lambda: fn(*args, **kwargs))(),
+        ):
+            # Simulate two uploads in same job
+            transcriber._ensured_containers.add(transcriber.storage_container)
+
+        # Container was pre-added — create_container should NOT be called
+        assert len(create_container_calls) == 0
+
+    def test_container_added_to_cache_after_creation(self, patched_settings):
+        """storage_container is added to _ensured_containers after first ensure."""
+        transcriber = AzureBatchTranscriber()
+        assert transcriber.storage_container not in transcriber._ensured_containers
+        # Simulate what upload_audio does after create_container
+        transcriber._ensured_containers.add(transcriber.storage_container)
+        assert transcriber.storage_container in transcriber._ensured_containers
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

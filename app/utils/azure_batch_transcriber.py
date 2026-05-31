@@ -22,7 +22,7 @@ from typing import Any, Dict, List, Optional
 import aiohttp
 
 try:
-    from azure.core.exceptions import AzureError
+    from azure.core.exceptions import AzureError, HttpResponseError
     from azure.storage.blob import (
         BlobSasPermissions,
         BlobServiceClient,
@@ -33,6 +33,7 @@ try:
 except ImportError:
     AZURE_STORAGE_AVAILABLE = False
     AzureError = Exception  # Fallback for type hints
+    HttpResponseError = Exception  # Fallback for type hints
     logging.warning(
         "azure-storage-blob not installed. Blob storage features will not work."
     )
@@ -168,6 +169,14 @@ class AzureBatchTranscriber:
 
         self._session: Optional[aiohttp.ClientSession] = None
 
+        # Lazily-created BlobServiceClient, shared across upload and delete within
+        # the same job so the connection pool and settings are reused (item 5).
+        self._blob_service_client: Optional["BlobServiceClient"] = None
+
+        # Containers that have already been ensured to exist, keyed by name.
+        # Avoids a redundant create_container API call on every upload (item 6).
+        self._ensured_containers: set = set()
+
     @property
     def headers(self) -> Dict[str, str]:
         """Get headers for API requests."""
@@ -181,6 +190,27 @@ class AzureBatchTranscriber:
         if self._session is None or self._session.closed:
             self._session = aiohttp.ClientSession()
         return self._session
+
+    def _get_blob_service_client(self) -> "BlobServiceClient":
+        """
+        Return the shared BlobServiceClient, creating it on first call.
+
+        The client is reused across upload_audio and delete_blob for the same
+        job so the underlying connection pool and tuned settings are shared
+        (item 5).  With account-key auth the client never expires.  If a
+        SAS-based connection string is used and it expires mid-job, callers
+        catch the resulting 403 error, reset this attribute to None, and call
+        this method again to obtain a fresh client.
+        """
+        if self._blob_service_client is None:
+            self._blob_service_client = BlobServiceClient.from_connection_string(
+                self.storage_connection_string,
+                connection_timeout=30,
+                read_timeout=600,
+                max_block_size=4 * 1024 * 1024,
+                max_single_put_size=8 * 1024 * 1024,
+            )
+        return self._blob_service_client
 
     async def close(self):
         """Close the HTTP session."""
@@ -226,23 +256,20 @@ class AzureBatchTranscriber:
         #   max_concurrency had no effect at all).  2 is conservative enough
         #   not to overwhelm the connection when multiple files upload
         #   concurrently.
-        blob_service_client = BlobServiceClient.from_connection_string(
-            self.storage_connection_string,
-            connection_timeout=30,
-            read_timeout=600,
-            max_block_size=4 * 1024 * 1024,
-            max_single_put_size=8 * 1024 * 1024,
-        )
+        blob_service_client = self._get_blob_service_client()
 
-        # Ensure container exists
+        # Ensure container exists — skip the API call if we already confirmed
+        # it in a previous upload for this job (item 6).
         container_client = blob_service_client.get_container_client(
             self.storage_container
         )
-        try:
-            await asyncio.to_thread(container_client.create_container)
-            logger.info(f"Created container: {self.storage_container}")
-        except Exception:
-            pass  # Container already exists
+        if self.storage_container not in self._ensured_containers:
+            try:
+                await asyncio.to_thread(container_client.create_container)
+                logger.info(f"Created container: {self.storage_container}")
+            except Exception:
+                pass  # Container already exists
+            self._ensured_containers.add(self.storage_container)
 
         # Generate unique blob name
         file_ext = os.path.splitext(file_path)[1]
@@ -337,9 +364,7 @@ class AzureBatchTranscriber:
             return False
 
         try:
-            blob_service_client = BlobServiceClient.from_connection_string(
-                self.storage_connection_string
-            )
+            blob_service_client = self._get_blob_service_client()
             container_client = blob_service_client.get_container_client(
                 self.storage_container
             )
@@ -347,6 +372,31 @@ class AzureBatchTranscriber:
             await asyncio.to_thread(blob_client.delete_blob)
             logger.info(f"Deleted blob: {blob_name}")
             return True
+        except HttpResponseError as e:
+            # A 403 on delete most likely means a SAS-based connection string
+            # has expired during a long transcription job.  Reset the cached
+            # client so the next call gets a fresh one and retry once.
+            if getattr(e, "status_code", None) == 403:
+                logger.warning(
+                    f"Got 403 deleting blob {blob_name} — resetting BlobServiceClient and retrying"
+                )
+                self._blob_service_client = None
+                try:
+                    blob_service_client = self._get_blob_service_client()
+                    container_client = blob_service_client.get_container_client(
+                        self.storage_container
+                    )
+                    blob_client = container_client.get_blob_client(blob_name)
+                    await asyncio.to_thread(blob_client.delete_blob)
+                    logger.info(f"Deleted blob on retry: {blob_name}")
+                    return True
+                except Exception as retry_e:
+                    logger.warning(
+                        f"Failed to delete blob {blob_name} on retry: {retry_e}"
+                    )
+                    return False
+            logger.warning(f"Failed to delete blob {blob_name}: {e}")
+            return False
         except Exception as e:
             logger.warning(f"Failed to delete blob {blob_name}: {e}")
             return False
@@ -456,12 +506,18 @@ class AzureBatchTranscriber:
             data = await response.json()
             return TranscriptionJob.from_api_response(data)
 
-    async def get_transcription_result(self, job_id: str) -> TranscriptionResult:
+    async def get_transcription_result(
+        self, job_id: str, fallback_locale: str = "en-US"
+    ) -> TranscriptionResult:
         """
         Get the transcription result for a completed job.
 
         Args:
             job_id: The transcription job ID.
+            fallback_locale: Locale to use when language identification is
+                disabled and no per-phrase locale is present.  Callers should
+                pass the locale from the last-polled TranscriptionJob so that
+                an extra GET /transcriptions/{id} round-trip is avoided (item 4).
 
         Returns:
             TranscriptionResult with parsed segments.
@@ -539,11 +595,9 @@ class AzureBatchTranscriber:
 
             duration = max(duration, end_seconds)
 
-        # Get job info for fallback language
-        job = await self.get_transcription_status(job_id)
-
-        # Use detected locale from language identification if available, otherwise use job locale
-        result_language = detected_locale if detected_locale else job.locale
+        # Use detected locale from language identification if available, otherwise
+        # use the fallback locale supplied by the caller (last-polled job locale).
+        result_language = detected_locale if detected_locale else fallback_locale
 
         return TranscriptionResult(
             job_id=job_id,
@@ -583,7 +637,7 @@ class AzureBatchTranscriber:
             logger.debug(f"Job {job_id} status: {job.status}")
 
             if job.status == TranscriptionStatus.SUCCEEDED:
-                return await self.get_transcription_result(job_id)
+                return await self.get_transcription_result(job_id, fallback_locale=job.locale)
 
             if job.status == TranscriptionStatus.FAILED:
                 raise RuntimeError(
