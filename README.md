@@ -3,7 +3,7 @@
 [![Donate to original subgen project](https://img.shields.io/badge/Donate_to_original_SubGen_project-PayPal-green.svg)](https://www.paypal.com/donate/?hosted_button_id=SU4QQP6LH5PF6)
 [![AI Ready](https://img.shields.io/badge/AI--Ready-yes-brightgreen?style=flat)](https://github.com/johnpapa/ai-ready)
 
-![SubGen-Azure-Batch Logo](https://raw.githubusercontent.com/TimoVerbrugghe/subgen-azure-batch/main/icon.png "SubGen-Azure-Batch")
+<img src="https://raw.githubusercontent.com/TimoVerbrugghe/subgen-azure-batch/main/icon.png" alt="SubGen-Azure-Batch Logo" width="200" />
 
 ## What is this?
 
