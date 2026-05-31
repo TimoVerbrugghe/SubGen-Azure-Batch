@@ -179,7 +179,7 @@ The following environment variables are available in Docker. They will default t
 | MEDIA_FOLDERS | '/tv,/movies' | **(New)** Comma-separated list of paths to show in the Web UI file browser |
 | SUBTITLE_LANGUAGE | '' | Default subtitle language code (leave empty for auto-detect) |
 | **Processing Settings** |   |   |
-| CONCURRENT_TRANSCRIPTIONS | 20 | Global limit for parallel transcription jobs. Enforced across all sources (UI batch, Bazarr, webhooks). Bazarr requests get priority over batch jobs. |
+| CONCURRENT_TRANSCRIPTIONS | 10 | Maximum number of files processed end-to-end concurrently — covers audio extraction, blob upload, and Azure transcription. Raise to increase throughput; lower to reduce CPU pressure from simultaneous FFmpeg processes. Azure's per-subscription quota is enforced by an internal guard. Bazarr requests are always served before batch jobs in the queue. |
 | TRANSCODE_DIR | '/transcode' | Directory for temp audio files. Mount a volume here to reduce memory usage during batch processing |
 | JOB_POLL_INTERVAL | 30 | Seconds between polling Azure for job status. Azure recommends no more than once per minute. |
 | TRANSCRIPTION_TIMEOUT | 3600 | Maximum seconds to wait for a transcription job before giving up. Combined with JOB_POLL_INTERVAL to determine how many polls are attempted. |
@@ -226,6 +226,31 @@ The following environment variables are available in Docker. They will default t
 | PUSHOVER_USER_KEY | '' | **(New)** Pushover user key for failure notifications |
 | PUSHOVER_API_TOKEN | '' | **(New)** Pushover application API token |
 | NOTIFY_ON_FAILURE | True | **(New)** Send notification when a transcription job fails |
+
+## Queue Management and Concurrency
+
+SubGen-Azure-Batch uses a priority-aware concurrency system to ensure Bazarr subtitle requests are never blocked behind large batch jobs.
+
+### Pipeline Semaphore
+
+`CONCURRENT_TRANSCRIPTIONS` governs end-to-end pipeline concurrency: a single slot covers audio extraction (FFmpeg), blob upload, Azure transcription, and cleanup. All sources — Web UI batches, Bazarr ASR, webhooks — share this single pool of slots.
+
+When all slots are occupied, incoming requests wait in a **priority queue**:
+
+| Source | Priority | Behaviour |
+|--------|----------|-----------|
+| Bazarr `/asr` | **High (0)** | Served next, ahead of any waiting batch jobs |
+| Web UI / webhooks | Normal (1) | Served in FIFO order among themselves |
+
+This means a Bazarr request submitted while a 500-file batch is running will be processed as soon as the next slot is free, without needing a separate worker pool.
+
+### Internal Azure Quota Guard
+
+Azure Speech Services imposes a per-subscription limit on simultaneous batch transcription jobs (200 for the S0 tier). An internal semaphore — not user-configurable — enforces this limit around the `create_transcription` → `delete_transcription` window, independent of `CONCURRENT_TRANSCRIPTIONS`. This prevents 429 throttling even if `CONCURRENT_TRANSCRIPTIONS` is set very high.
+
+### Upload Semaphore
+
+`MAX_CONCURRENT_UPLOADS` (default 2) limits simultaneous blob uploads independently to avoid Azure Storage write-timeout errors when many jobs reach the upload phase at the same time.
 
 ## API Endpoints
 

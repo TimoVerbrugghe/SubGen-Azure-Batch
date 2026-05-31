@@ -434,91 +434,91 @@ class TestTranscriptionServiceHelpers:
 
 
 class TestTranscriptionServiceConcurrency:
-    """Test global transcription concurrency control with priority queue."""
-    
+    """Test global transcription concurrency control with PrioritySemaphore."""
+
     @pytest.fixture(autouse=True)
-    def reset_concurrency_state(self):
-        """Reset concurrency state before and after each test."""
+    def reset_pipeline_semaphore(self):
+        """Reset pipeline semaphore before and after each test."""
         from app.transcription_service import TranscriptionService
 
-        # Reset semaphore and waiters
-        TranscriptionService._transcription_semaphore = None
-        TranscriptionService._priority_waiters = []
-        TranscriptionService._normal_waiters = []
+        TranscriptionService._pipeline_semaphore = None
         yield
-        TranscriptionService._transcription_semaphore = None
-        TranscriptionService._priority_waiters = []
-        TranscriptionService._normal_waiters = []
-    
+        TranscriptionService._pipeline_semaphore = None
+
     def test_semaphore_lazy_initialization(self):
-        """Test that transcription semaphore is lazily initialized."""
+        """Pipeline semaphore is None until first access, then stable."""
         from app.transcription_service import TranscriptionService
 
-        # Should be None initially (after reset)
-        assert TranscriptionService._transcription_semaphore is None
-        
-        # Should be created on first access
-        semaphore = TranscriptionService._get_transcription_semaphore()
-        assert semaphore is not None
-        assert TranscriptionService._transcription_semaphore is semaphore
-        
-        # Should return same instance on subsequent calls
-        semaphore2 = TranscriptionService._get_transcription_semaphore()
-        assert semaphore2 is semaphore
-    
+        assert TranscriptionService._pipeline_semaphore is None
+
+        sem = TranscriptionService._get_pipeline_semaphore()
+        assert sem is not None
+        assert TranscriptionService._pipeline_semaphore is sem
+
+        sem2 = TranscriptionService._get_pipeline_semaphore()
+        assert sem2 is sem
+
     @pytest.mark.asyncio
     async def test_acquire_and_release_slot(self):
-        """Test basic acquire and release of transcription slots."""
+        """Basic acquire/release completes without blocking."""
         from app.transcription_service import TranscriptionService
 
-        # Acquire a slot
-        await TranscriptionService.acquire_transcription_slot(priority=False)
-        
-        # Release it
-        await TranscriptionService.release_transcription_slot()
-        
-        # Should complete without errors
-    
+        sem = TranscriptionService._get_pipeline_semaphore()
+        await sem.acquire(priority=1)
+        sem.release()
+
     @pytest.mark.asyncio
     async def test_priority_acquire(self):
-        """Test that priority flag can be used for acquisition."""
+        """Bazarr priority acquire (priority=0) completes without blocking."""
         from app.transcription_service import TranscriptionService
 
-        # Acquire with priority
-        await TranscriptionService.acquire_transcription_slot(priority=True)
-        
-        # Release it
-        await TranscriptionService.release_transcription_slot()
-        
-        # Should complete without errors
-    
+        sem = TranscriptionService._get_pipeline_semaphore()
+        await sem.acquire(priority=0)
+        sem.release()
+
     @pytest.mark.asyncio
     async def test_multiple_slots(self):
-        """Test acquiring multiple slots up to limit."""
+        """Multiple slots can be acquired and released up to the limit."""
         from app.transcription_service import TranscriptionService
 
-        # Acquire 3 slots (well under default limit of 50)
+        sem = TranscriptionService._get_pipeline_semaphore()
         for _ in range(3):
-            await TranscriptionService.acquire_transcription_slot(priority=False)
-        
-        # Release them all
+            await sem.acquire(priority=1)
         for _ in range(3):
-            await TranscriptionService.release_transcription_slot()
-    
+            sem.release()
+
     @pytest.mark.asyncio
-    async def test_priority_waiters_list_management(self):
-        """Test that priority and normal waiters are tracked separately."""
-        from app.transcription_service import TranscriptionService
+    async def test_priority_ordering(self):
+        """High-priority (Bazarr) waiter is served before normal waiter."""
+        import asyncio
+        from app.transcription_service import PrioritySemaphore
 
-        # Initially empty
-        assert len(TranscriptionService._priority_waiters) == 0
-        assert len(TranscriptionService._normal_waiters) == 0
-        
-        # After acquiring (when not at capacity), lists should still be empty
-        await TranscriptionService.acquire_transcription_slot(priority=True)
-        assert len(TranscriptionService._priority_waiters) == 0
-        
-        await TranscriptionService.release_transcription_slot()
+        sem = PrioritySemaphore(1)
+        # Fill the single slot
+        await sem.acquire(priority=1)
+
+        served: list[str] = []
+
+        async def bazarr_job():
+            await sem.acquire(priority=0)
+            served.append("bazarr")
+            sem.release()
+
+        async def batch_job():
+            await sem.acquire(priority=1)
+            served.append("batch")
+            sem.release()
+
+        # Enqueue batch first, then Bazarr — Bazarr should still win
+        t_batch = asyncio.create_task(batch_job())
+        await asyncio.sleep(0)  # let batch park in queue
+        t_bazarr = asyncio.create_task(bazarr_job())
+        await asyncio.sleep(0)  # let bazarr park in queue
+
+        sem.release()  # release the initial slot; Bazarr should be served first
+        await asyncio.gather(t_batch, t_bazarr)
+
+        assert served[0] == "bazarr", f"Expected bazarr first, got: {served}"
 
 
 if __name__ == "__main__":

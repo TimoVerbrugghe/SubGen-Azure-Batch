@@ -182,7 +182,7 @@ def mock_settings():
     settings.notification = mock_notification
     settings.subtitle_language = "en"
     settings.media_folders = ["/media/tv", "/media/movies"]
-    settings.concurrent_jobs = 2
+    settings.concurrent_transcriptions = 10
     settings.transcode_dir = ""  # Empty string means use system temp
     settings.host = "0.0.0.0"
     settings.port = 8090

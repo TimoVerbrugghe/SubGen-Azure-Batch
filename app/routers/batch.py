@@ -383,7 +383,6 @@ async def process_batch_session(session_id: str):
         return
 
     metadata = _batch_metadata.get(session_id, {})
-    settings = get_settings()
 
     # Build a queue of job IDs so workers can pull from it without knowing
     # the total count in advance.
@@ -399,21 +398,14 @@ async def process_batch_session(session_id: str):
             except asyncio.QueueEmpty:
                 return
             try:
-                # Acquire global transcription slot (normal priority for batch jobs).
-                # Bazarr requests use priority=True and jump ahead of these.
-                await TranscriptionService.acquire_transcription_slot(priority=False)
-                try:
-                    await process_batch_job(session_id, job_id)
-                finally:
-                    await TranscriptionService.release_transcription_slot()
+                await process_batch_job(session_id, job_id)
             except Exception as e:
                 logger.exception(f"[{job_id}] Failed in batch processing: {e}")
 
-    # Create at most concurrent_transcriptions workers — never more tasks than
-    # jobs.  This replaces the old asyncio.gather(*[N coroutines]) pattern that
-    # spawned all N tasks simultaneously, causing excessive event-loop pressure
-    # when a large batch (e.g. 61 jobs) was submitted.
-    worker_count = min(settings.concurrent_transcriptions, job_queue.qsize())
+    # Spawn one worker per job so that all jobs can enter the pipeline semaphore
+    # queue immediately.  The PrioritySemaphore inside TranscriptionService gates
+    # actual concurrency and ensures Bazarr jobs (priority=0) always go first.
+    worker_count = job_queue.qsize()
     workers = [asyncio.create_task(worker()) for _ in range(worker_count)]
     await asyncio.gather(*workers, return_exceptions=True)
     
