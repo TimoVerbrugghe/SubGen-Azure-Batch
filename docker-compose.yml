@@ -82,6 +82,7 @@ services:
       - PUSHOVER_USER_KEY=${PUSHOVER_USER_KEY:-}
       - PUSHOVER_API_TOKEN=${PUSHOVER_API_TOKEN:-}
       - NOTIFY_ON_FAILURE=${NOTIFY_ON_FAILURE:-true}
+      - NOTIFY_ON_SUCCESS=${NOTIFY_ON_SUCCESS:-false}
     
     volumes:
       # Mount your media directories (adjust paths as needed)

@@ -32,7 +32,7 @@ Key benefits of SubGen-Azure-Batch:
 | **Standalone Mode** | Yes (launcher.py) | Docker only |
 | **Metadata Refresh** | After queue start | After transcription completion |
 | **Bazarr Notifications** | Not available | Notifies Bazarr when subtitles are generated via webhooks/UI |
-| **Pushover Notifications** | Not available | Notifies on transcription failures |
+| **Pushover Notifications** | Not available | Per-file failure alerts and batch completion summaries |
 
 **Removed Environment Variables** (not applicable to SubGen-Azure-Batch):
 
@@ -58,7 +58,7 @@ Key benefits of SubGen-Azure-Batch:
 
 - Web UI for browsing media and submitting batch transcription jobs
 - Azure Speech Services integration with blob storage
-- Pushover notifications for transcription failures
+- Pushover notifications for per-file failures and batch completion summaries
 - Bazarr integration - automatically notifies Bazarr when subtitles are generated
 - Authenticated REST and MCP interfaces for agent-submitted transcription batches
 
@@ -70,6 +70,7 @@ You'll need:
 
 - **Azure Speech Services** - [Create a resource](https://portal.azure.com/#create/Microsoft.CognitiveServicesSpeechServices)
 - **Azure Storage Account** - [Create a storage account](https://portal.azure.com/#create/Microsoft.StorageAccount-ARM)
+- **Pushover (optional)** - Create a [Pushover account](https://pushover.net/) and [application](https://pushover.net/apps/build) for notifications. Configure the application API token and your user key with `PUSHOVER_API_TOKEN` and `PUSHOVER_USER_KEY`.
 
 ## Docker
 
@@ -227,9 +228,12 @@ The following environment variables are available in Docker. They will default t
 | BAZARR_URL | '' | **(New)** Bazarr server URL for notifications (e.g., http://bazarr:6767) |
 | BAZARR_API_KEY | '' | **(New)** Bazarr API key for notifications |
 | **Notifications** |   |   |
-| PUSHOVER_USER_KEY | '' | **(New)** Pushover user key for failure notifications |
-| PUSHOVER_API_TOKEN | '' | **(New)** Pushover application API token |
-| NOTIFY_ON_FAILURE | True | **(New)** Send notification when a transcription job fails |
+| PUSHOVER_USER_KEY | '' | **(New)** Pushover user/group key. Required with `PUSHOVER_API_TOKEN` to send notifications. |
+| PUSHOVER_API_TOKEN | '' | **(New)** Pushover application API token. Create an application in Pushover to obtain it. |
+| NOTIFY_ON_FAILURE | True | **(New)** Send per-file alerts and a batch summary when one or more files fail. |
+| NOTIFY_ON_SUCCESS | False | Send a batch summary when all processed files succeed. Disabled by default. |
+
+Batch summaries include total, completed, failed, and skipped file counts. Both Pushover credentials are required. Successful batch summaries are opt-in; set `NOTIFY_ON_SUCCESS=true` to enable them. Failure summaries follow `NOTIFY_ON_FAILURE`, which also controls the existing per-file failure alerts.
 
 ## Queue Management and Concurrency
 
