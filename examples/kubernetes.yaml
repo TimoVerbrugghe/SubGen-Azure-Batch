@@ -1,0 +1,143 @@
+# Replace image tag, PVC names, ingress class/host, TLS secret and Azure region.
+# Provision subgen-secrets using your secret manager; never commit live credentials.
+# Apply in your chosen namespace: kubectl apply -n <namespace> -f examples/kubernetes.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: subgen
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: subgen
+  template:
+    metadata:
+      labels:
+        app: subgen
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: subgen
+          image: ghcr.io/timoverbrugghe/subgen-azure-batch:REPLACE_WITH_FEATURE_TAG
+          ports:
+            - name: http
+              containerPort: 9000
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          env:
+            - name: AZURE_SPEECH_REGION
+              value: swedencentral
+            - name: AZURE_SPEECH_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: subgen-secrets
+                  key: AZURE_SPEECH_KEY
+            - name: AZURE_STORAGE_CONNECTION_STRING
+              valueFrom:
+                secretKeyRef:
+                  name: subgen-secrets
+                  key: AZURE_STORAGE_CONNECTION_STRING
+            - name: AGENT_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: subgen-secrets
+                  key: AGENT_API_KEY
+            - name: AGENT_MCP_ALLOWED_HOSTS
+              value: "" # Any host; optionally restrict to subgen.example.com.
+            - name: MEDIA_FOLDERS
+              value: /tv,/movies
+            - name: TRANSCODE_DIR
+              value: /transcode
+            - name: NOTIFY_ON_SUCCESS
+              value: "true"
+            - name: NOTIFY_ON_FAILURE
+              value: "true"
+            - name: PUSHOVER_USER_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: subgen-secrets
+                  key: PUSHOVER_USER_KEY
+                  optional: true
+            - name: PUSHOVER_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: subgen-secrets
+                  key: PUSHOVER_API_TOKEN
+                  optional: true
+          resources:
+            requests:
+              cpu: 300m
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 5
+            failureThreshold: 30
+          volumeMounts:
+            - name: tv
+              mountPath: /tv
+            - name: movies
+              mountPath: /movies
+            - name: transcode
+              mountPath: /transcode
+      volumes:
+        - name: tv
+          persistentVolumeClaim:
+            claimName: tvshows-pvc
+        - name: movies
+          persistentVolumeClaim:
+            claimName: movies-pvc
+        - name: transcode
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: subgen
+spec:
+  selector:
+    app: subgen
+  ports:
+    - name: http
+      port: 9000
+      targetPort: http
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: subgen
+spec:
+  ingressClassName: REPLACE_WITH_INGRESS_CLASS
+  tls:
+    - hosts: [subgen.example.com]
+      secretName: subgen-tls
+  rules:
+    - host: subgen.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: subgen
+                port:
+                  name: http

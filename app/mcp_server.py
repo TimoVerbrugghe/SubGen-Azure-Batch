@@ -16,11 +16,19 @@ from app.agent_api import (
 )
 from app.config import get_settings
 
+_allowed_hosts = get_settings().agent_mcp_allowed_hosts
+
 mcp_server = FastMCP(
     "SubGen-Azure-Batch",
     streamable_http_path="/",
     transport_security=TransportSecuritySettings(
-        allowed_hosts=get_settings().agent_mcp_allowed_hosts
+        enable_dns_rebinding_protection=bool(_allowed_hosts),
+        allowed_hosts=_allowed_hosts,
+        allowed_origins=[
+            f"{scheme}://{host}"
+            for host in _allowed_hosts
+            for scheme in ("http", "https")
+        ],
     ),
 )
 

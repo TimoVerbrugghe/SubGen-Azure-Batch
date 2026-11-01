@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import runpy
 import shutil
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
@@ -387,6 +388,77 @@ async def test_cancel_stops_a_tracked_worker_task(mock_settings, monkeypatch):
 
 class TestMCPProtocol:
     """Exercise initialization, discovery, and tool calls over real MCP HTTP."""
+
+    @pytest.mark.parametrize(
+        ("allowed_hosts", "host", "origin", "key", "expected"),
+        [
+            ([], "remote.example:9443", "https://remote.example:9443", API_KEY, 200),
+            ([], "remote.example:9443", None, "", 401),
+            ([], "remote.example:9443", None, "incorrect", 401),
+            (
+                ["subgen.example"],
+                "subgen.example",
+                "https://subgen.example",
+                API_KEY,
+                200,
+            ),
+            (["subgen.example"], "other.example", None, API_KEY, 421),
+            (
+                ["subgen.example"],
+                "subgen.example",
+                "https://other.example",
+                API_KEY,
+                403,
+            ),
+        ],
+    )
+    def test_should_enforce_key_and_optional_host_origin_restrictions(
+        self,
+        agent_client,
+        mock_settings,
+        monkeypatch,
+        allowed_hosts,
+        host,
+        origin,
+        key,
+        expected,
+    ):
+        """Validate actual MCP requests for blank and explicitly restricted hosts."""
+        from app import main
+
+        mock_settings.agent_mcp_allowed_hosts = allowed_hosts
+        namespace = runpy.run_path(
+            str(Path(__file__).parents[1] / "app" / "mcp_server.py")
+        )
+        monkeypatch.setattr(main, "mcp_server", namespace["mcp_server"])
+        headers = {
+            "Host": host,
+            "X-API-Key": key,
+            "Accept": "application/json, text/event-stream",
+        }
+        if origin:
+            headers["Origin"] = origin
+        with TestClient(main.create_app()) as client:
+            response = client.post(
+                "/mcp",
+                headers=headers,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "initialize",
+                    "params": {
+                        "protocolVersion": "2025-03-26",
+                        "capabilities": {},
+                        "clientInfo": {"name": "host-test", "version": "1.0"},
+                    },
+                },
+            )
+        assert response.status_code == expected
+        if expected == 200:
+            assert (
+                _mcp_data(response)["result"]["serverInfo"]["name"]
+                == "SubGen-Azure-Batch"
+            )
 
     def test_streamable_http_initialization_discovery_and_tool_calls(
         self, agent_client
