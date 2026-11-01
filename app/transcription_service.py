@@ -333,6 +333,12 @@ class TranscriptionService:
         """Update job status and optional fields."""
         job = cls.get_job(session_id, job_id)
         if job:
+            if job.status == JobStatus.CANCELLED and status != JobStatus.CANCELLED:
+                logger.debug(
+                    f"[{job_id}] Ignoring {status.value} update for cancelled job"
+                )
+                return
+
             job.status = status
             for key, value in kwargs.items():
                 if hasattr(job, key):

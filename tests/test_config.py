@@ -342,6 +342,8 @@ class TestSettingsSingleton:
         assert hasattr(settings, 'skip')
         assert hasattr(settings, 'subtitle_naming')
         assert hasattr(settings, 'path_mapping')
+        assert hasattr(settings, 'notification')
+        assert settings.notification.notify_on_success is False
 
 
 class TestRequireAzureConfigured:
