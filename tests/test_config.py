@@ -296,6 +296,18 @@ class TestFormatDuration:
 class TestSettingsSingleton:
     """Test Settings singleton behavior."""
 
+    @pytest.mark.parametrize("value", [None, "", "   "])
+    def test_should_accept_any_mcp_host_when_allowlist_is_unset_or_blank(
+        self, value, mock_settings
+    ):
+        """Empty environment configuration leaves the host allowlist optional."""
+        from app.config import Settings
+
+        environment = {} if value is None else {"AGENT_MCP_ALLOWED_HOSTS": value}
+        with patch.dict(os.environ, environment, clear=True):
+            settings = Settings.from_env()
+        assert settings.agent_mcp_allowed_hosts == []
+
     def test_agent_access_settings_are_loaded_from_environment(self):
         """Test the agent key and MCP host allowlist configuration."""
         from app.config import Settings

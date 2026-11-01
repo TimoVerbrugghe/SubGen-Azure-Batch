@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- MCP is hosted at `/mcp` in Docker and Kubernetes, with updated deployment examples. An empty `AGENT_MCP_ALLOWED_HOSTS` now accepts any host/Origin while retaining mandatory API-key authentication; a configured allowlist enables DNS-rebinding protection.
+
 ### Added
 
 - Batch notifications identify the batch, languages, and shows/seasons or movies, with bounded media and failed-file summaries.

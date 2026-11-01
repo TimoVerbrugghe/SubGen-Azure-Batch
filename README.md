@@ -184,7 +184,7 @@ The following environment variables are available in Docker. They will default t
 | SUBTITLE_LANGUAGE | '' | Default subtitle language code (leave empty for auto-detect) |
 | **Agent API** |   |   |
 | AGENT_API_KEY | '' | **(New)** Bearer key for agent REST/MCP access. Empty disables these interfaces; configure a unique key and keep the service on a trusted network. |
-| AGENT_MCP_ALLOWED_HOSTS | 'localhost:*,127.0.0.1:*,[::1]:*' | **(New)** Comma-separated MCP Host header allowlist. Add exact host:port entries for trusted remote clients; DNS rebinding protection remains enabled. |
+| AGENT_MCP_ALLOWED_HOSTS | '' | **(New)** Optional comma-separated MCP Host header allowlist. Empty/unset accepts any host and Origin; a non-empty list enables DNS-rebinding protection. API-key authentication is always required. |
 | **Processing Settings** |   |   |
 | CONCURRENT_TRANSCRIPTIONS | 10 | Maximum number of files processed end-to-end concurrently — covers audio extraction, blob upload, and Azure transcription. Raise to increase throughput; lower to reduce CPU pressure from simultaneous FFmpeg processes. Azure's per-subscription quota is enforced by an internal guard. Bazarr requests are always served before batch jobs in the queue. |
 | TRANSCODE_DIR | '/transcode' | Directory for temp audio files. Mount a volume here to reduce memory usage during batch processing |
@@ -298,13 +298,27 @@ The response contains a `session_id`. List active agent batches with `GET /api/a
 
 ### MCP client setup
 
-The server uses the MCP Streamable HTTP transport at `http://<host>:9000/mcp`. Configure your MCP client to send `X-API-Key` with the same `AGENT_API_KEY` value. MCP Host validation allows localhost by default; add the exact host and port used by remote clients to `AGENT_MCP_ALLOWED_HOSTS` (for example `subgen.local:9000`) without disabling DNS rebinding protection. For clients using a JSON server configuration, the shape is:
+The MCP server is hosted **inside SubGen**, alongside the web UI on port 9000.
+No separate MCP process or local bridge is required in Docker or Kubernetes.
+It uses Streamable HTTP at `http://<host>:9000/mcp`, or
+`https://<host>/mcp` behind an HTTPS reverse proxy.
+Configure your client to send `X-API-Key` on every request.
+
+`AGENT_MCP_ALLOWED_HOSTS` is optional: empty or unset accepts any Host and Origin,
+but **does not bypass API-key authentication**. This disables the SDK's
+DNS-rebinding host/origin checks. For defense in depth, set a comma-separated
+allowlist such as `subgen.example.com,subgen.local:9000,localhost:*`.
+Use the externally requested hostname (include the port when present); corresponding
+HTTP/HTTPS origins are allowed automatically. This setting is not an IP firewall
+or a list of client machines.
+
+For clients using a JSON server configuration, the shape is:
 
 ```json
 {
   "mcpServers": {
     "subgen": {
-      "url": "http://localhost:9000/mcp",
+      "url": "https://subgen.example.com/mcp",
       "headers": {
         "X-API-Key": "<your-AGENT_API_KEY>"
       }
@@ -314,6 +328,51 @@ The server uses the MCP Streamable HTTP transport at `http://<host>:9000/mcp`. C
 ```
 
 The MCP tools are `submit_transcription_batch`, `list_active_batches`, `get_batch_status`, and `cancel_batch`. The submit tool accepts the same file/folder, language, skip-rule, and Bazarr options as REST.
+
+### Docker deployment
+
+The included [docker-compose.yml](docker-compose.yml) passes both agent variables
+and Pushover settings from `.env` into the container. Generate a unique API key
+locally (`openssl rand -hex 32`), place it in `.env` as `AGENT_API_KEY`, and never
+commit that file. Optionally set `AGENT_MCP_ALLOWED_HOSTS`; leave it blank to accept
+any hostname. Then run:
+
+```bash
+docker compose up -d --build
+```
+
+Connect on a trusted LAN at `http://<docker-host>:9000/mcp`, or configure an HTTPS
+reverse proxy for `https://subgen.example.com/mcp`. The same API-key requirement
+applies in either case.
+
+### Kubernetes deployment
+
+The [example manifest](examples/kubernetes.yaml) contains a single-replica
+Deployment, ClusterIP Service, and HTTPS Ingress for the hosted MCP server.
+Before applying it:
+
+1. Select your namespace and a published image tag/digest containing these features.
+2. Replace the media PVC names with your existing writable RWX media claims.
+3. Provision a `subgen-secrets` Secret in that namespace with `AZURE_SPEECH_KEY`,
+   `AZURE_STORAGE_CONNECTION_STRING`, and `AGENT_API_KEY`. Optionally add
+   `PUSHOVER_USER_KEY` and `PUSHOVER_API_TOKEN`. Use your secret manager; do not
+   commit live credentials. Set `AZURE_SPEECH_REGION` to your resource's region.
+4. Replace the Ingress hostname, ingress class, and TLS Secret name. Provision a
+   matching TLS certificate, and optionally set `AGENT_MCP_ALLOWED_HOSTS`.
+5. Apply: `kubectl apply -n <namespace> -f examples/kubernetes.yaml`.
+
+Ingress must route `/mcp` (including `/mcp/`) to port 9000 and preserve
+`X-API-Key`, `Mcp-Session-Id`, `MCP-Protocol-Version`, and streaming responses.
+Disable response buffering where your ingress requires it and allow long-lived
+streaming requests. These settings are ingress-controller-specific.
+Use one replica: batch and MCP session tracking is in memory; multiple replicas
+would require session affinity and do not share batch state.
+The example mounts `/transcode` as an `emptyDir` for temporary audio; no settings
+database or additional persistent application state is introduced.
+
+Only the agent REST API and `/mcp` are API-key protected. The existing web UI and
+legacy routes retain their behavior; keep the entire service on a trusted private
+network or add authentication at the ingress for those routes.
 
 **Network security:** Treat the API key as a bearer secret. Keep this service on localhost or a trusted private network, restrict access with firewall rules, and use a TLS-terminating reverse proxy if clients connect across an untrusted network. Do not expose the service or MCP endpoint directly to the public internet.
 

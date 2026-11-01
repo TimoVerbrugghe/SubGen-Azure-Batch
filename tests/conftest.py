@@ -185,7 +185,7 @@ def mock_settings():
     settings.port = 8090
     settings.debug = False
     settings.agent_api_key = "subgen-agent-key-0123456789abcdef"
-    settings.agent_mcp_allowed_hosts = ["localhost:*", "127.0.0.1:*", "[::1]:*"]
+    settings.agent_mcp_allowed_hosts = []
     
     return settings
 
