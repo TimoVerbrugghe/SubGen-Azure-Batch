@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Pushover batch completion summaries for successes and batches with errors, including completed, failed, and skipped file counts. Success summaries are opt-in with `NOTIFY_ON_SUCCESS`.
+
 ## [1.0.1] - 2025-05-25
 
 ### Added

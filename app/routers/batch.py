@@ -27,6 +27,7 @@ from app.transcription_service import JobStatus as ServiceJobStatus
 from app.transcription_service import (TranscriptionJob, TranscriptionService,
                                        TranscriptionSession)
 from app.utils.bazarr_client import BazarrClient
+from app.utils.notification_service import notify_batch_completion
 from app.utils.skip_checker import should_skip_file
 from app.utils.subtitle_utils import get_srt_path
 
@@ -352,6 +353,9 @@ async def process_batch_job(session_id: str, job_id: str):
     if not job:
         logger.error(f"Job not found: {session_id}/{job_id}")
         return
+    if job.status == ServiceJobStatus.CANCELLED:
+        logger.info(f"[{job_id}] Skipping cancelled batch job")
+        return
     
     try:
         # Use TranscriptionService to process the job
@@ -382,7 +386,7 @@ async def process_batch_session(session_id: str):
         logger.error(f"Session not found for processing: {session_id}")
         return
 
-    metadata = _batch_metadata.get(session_id, {})
+    metadata = _batch_metadata.setdefault(session_id, {})
 
     # Build a queue of job IDs so workers can pull from it without knowing
     # the total count in advance.
@@ -417,6 +421,50 @@ async def process_batch_session(session_id: str):
     settings = get_settings()
     if notify_bazarr and settings.bazarr.is_configured:
         await _notify_bazarr_for_completed_jobs(session_id, session)
+
+    await _notify_batch_completion_once(session_id, session, metadata)
+
+
+async def _notify_batch_completion_once(
+    session_id: str, session: TranscriptionSession, metadata: dict
+) -> None:
+    """Send at most one completion summary after all batch jobs reach a final state."""
+    if metadata.get("completion_notification_attempted"):
+        return
+
+    if any(job.status == ServiceJobStatus.CANCELLED for job in session.jobs.values()):
+        metadata["completion_notification_attempted"] = True
+        logger.info(
+            f"[{session_id}] Skipping batch completion notification after cancellation"
+        )
+        return
+
+    if any(
+        job.status not in (ServiceJobStatus.COMPLETED, ServiceJobStatus.FAILED)
+        for job in session.jobs.values()
+    ) or not session.jobs:
+        logger.warning(
+            f"[{session_id}] Skipping batch completion notification before all jobs finish"
+        )
+        return
+
+    metadata["completion_notification_attempted"] = True
+    completed_jobs = sum(
+        job.status == ServiceJobStatus.COMPLETED for job in session.jobs.values()
+    )
+    failed_jobs = sum(
+        job.status == ServiceJobStatus.FAILED for job in session.jobs.values()
+    )
+    skipped_jobs = len(metadata.get("skipped", []))
+
+    try:
+        await notify_batch_completion(
+            completed_jobs=completed_jobs,
+            failed_jobs=failed_jobs,
+            skipped_jobs=skipped_jobs,
+        )
+    except Exception:
+        logger.exception(f"[{session_id}] Batch completion notification failed")
 
 
 @router.post("/submit", response_model=BatchSubmitResponse)

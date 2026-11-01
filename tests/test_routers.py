@@ -345,6 +345,187 @@ class TestBatchRouterExtended:
         assert response.status_code in [404, 405]
 
 
+class TestBatchCompletionNotifications:
+    """Test batch completion notification behavior through the batch worker."""
+
+    @pytest.fixture(autouse=True)
+    def clear_batch_metadata(self):
+        from app.routers import batch
+
+        batch._batch_metadata.clear()
+        yield
+        batch._batch_metadata.clear()
+
+    async def process_batch(self, statuses, skipped=()):
+        from app.routers import batch
+        from app.transcription_service import (
+            JobSource,
+            TranscriptionJob,
+            TranscriptionService,
+            TranscriptionSession,
+        )
+
+        session = TranscriptionSession(id="notification-test", source=JobSource.UI)
+        for index, status in enumerate(statuses):
+            job = TranscriptionJob(
+                id=f"job-{index}",
+                file_path=f"/media/{index}.mkv",
+                language="en",
+                source=JobSource.UI,
+                status=status,
+            )
+            session.jobs[job.id] = job
+
+        metadata = {
+            "skipped": [{"file_path": path} for path in skipped],
+            "notify_bazarr": False,
+        }
+        batch._batch_metadata[session.id] = metadata
+
+        with (
+            patch.object(TranscriptionService, "get_session", return_value=session),
+            patch(
+                "app.routers.batch.process_batch_job", new_callable=AsyncMock
+            ) as process_job,
+            patch(
+                "app.routers.batch._refresh_media_servers_for_completed_jobs",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "app.routers.batch.notify_batch_completion",
+                new_callable=AsyncMock,
+            ) as notify,
+            patch(
+                "app.routers.batch.get_settings",
+                return_value=MagicMock(bazarr=MagicMock(is_configured=False)),
+            ),
+        ):
+            await batch.process_batch_session(session.id)
+
+        return session, metadata, notify, process_job
+
+    @pytest.mark.asyncio
+    async def test_success_summary_includes_skipped_file_count(self):
+        from app.transcription_service import JobStatus
+
+        _, metadata, notify, _ = await self.process_batch(
+            [JobStatus.COMPLETED, JobStatus.COMPLETED],
+            skipped=["/media/skipped.mkv"],
+        )
+
+        notify.assert_awaited_once_with(
+            completed_jobs=2,
+            failed_jobs=0,
+            skipped_jobs=1,
+        )
+        assert metadata["completion_notification_attempted"] is True
+
+    @pytest.mark.parametrize(
+        ("statuses", "expected_completed", "expected_failed"),
+        [
+            (["completed", "failed"], 1, 1),
+            (["failed", "failed"], 0, 2),
+        ],
+        ids=["mixed-results", "all-errors"],
+    )
+    @pytest.mark.asyncio
+    async def test_error_summaries_cover_mixed_and_all_error_batches(
+        self, statuses, expected_completed, expected_failed
+    ):
+        from app.transcription_service import JobStatus
+
+        service_statuses = [JobStatus(status) for status in statuses]
+        _, _, notify, _ = await self.process_batch(service_statuses)
+
+        notify.assert_awaited_once_with(
+            completed_jobs=expected_completed,
+            failed_jobs=expected_failed,
+            skipped_jobs=0,
+        )
+
+    @pytest.mark.asyncio
+    async def test_cancellation_prevents_batch_summary(self):
+        from app.transcription_service import JobStatus
+
+        _, metadata, notify, _ = await self.process_batch(
+            [JobStatus.COMPLETED, JobStatus.CANCELLED]
+        )
+
+        notify.assert_not_awaited()
+        assert metadata["completion_notification_attempted"] is True
+
+    @pytest.mark.asyncio
+    async def test_incomplete_batch_does_not_send_summary(self):
+        from app.transcription_service import JobStatus
+
+        _, metadata, notify, _ = await self.process_batch([JobStatus.PENDING])
+
+        notify.assert_not_awaited()
+        assert "completion_notification_attempted" not in metadata
+
+    @pytest.mark.asyncio
+    async def test_batch_summary_is_attempted_only_once(self):
+        from app.routers import batch
+        from app.transcription_service import JobStatus
+
+        _, _, notify, _ = await self.process_batch([JobStatus.COMPLETED])
+
+        with (
+            patch(
+                "app.routers.batch.process_batch_job", new_callable=AsyncMock
+            ),
+            patch(
+                "app.routers.batch._refresh_media_servers_for_completed_jobs",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "app.routers.batch.notify_batch_completion",
+                new_callable=AsyncMock,
+            ) as second_notify,
+            patch(
+                "app.routers.batch.get_settings",
+                return_value=MagicMock(bazarr=MagicMock(is_configured=False)),
+            ),
+        ):
+            await batch.process_batch_session("notification-test")
+
+        notify.assert_awaited_once()
+        second_notify.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_notification_error_does_not_change_batch_status(self):
+        from app.routers import batch
+        from app.transcription_service import JobStatus
+
+        session, metadata, _, _ = await self.process_batch(
+            [JobStatus.COMPLETED, JobStatus.FAILED]
+        )
+        initial_statuses = [job.status for job in session.jobs.values()]
+        metadata.pop("completion_notification_attempted")
+
+        with (
+            patch(
+                "app.routers.batch.process_batch_job", new_callable=AsyncMock
+            ),
+            patch(
+                "app.routers.batch._refresh_media_servers_for_completed_jobs",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "app.routers.batch.notify_batch_completion",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("network unavailable"),
+            ),
+            patch(
+                "app.routers.batch.get_settings",
+                return_value=MagicMock(bazarr=MagicMock(is_configured=False)),
+            ),
+        ):
+            await batch.process_batch_session(session.id)
+
+        assert [job.status for job in session.jobs.values()] == initial_statuses
+
+
 class TestWebhookRouterExtended:
     """Extended tests for webhook router."""
     
