@@ -10,6 +10,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - MCP is hosted at `/mcp` in Docker and Kubernetes, with updated deployment examples. An empty `AGENT_MCP_ALLOWED_HOSTS` now accepts any host/Origin while retaining mandatory API-key authentication; a configured allowlist enables DNS-rebinding protection.
 
+### Fixed
+
+- Bazarr scan timeouts now report an unconfirmed remote outcome with exception diagnostics instead of claiming the scan failed; batch completion notifications are sent before waiting for scans.
+
 ### Added
 
 - Batch notifications identify the batch, languages, and shows/seasons or movies, with bounded media and failed-file summaries.

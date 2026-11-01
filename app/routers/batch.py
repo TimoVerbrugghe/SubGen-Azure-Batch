@@ -26,7 +26,7 @@ from app.transcription_service import JobSource
 from app.transcription_service import JobStatus as ServiceJobStatus
 from app.transcription_service import (TranscriptionJob, TranscriptionService,
                                        TranscriptionSession)
-from app.utils.bazarr_client import BazarrClient
+from app.utils.bazarr_client import BazarrClient, BazarrScanOutcome
 from app.utils.notification_service import notify_batch_completion
 from app.utils.skip_checker import should_skip_file
 from app.utils.subtitle_utils import get_srt_path
@@ -210,11 +210,20 @@ async def _notify_bazarr_for_completed_jobs(session_id: str, session: Transcript
                 series_id = series.get('sonarrSeriesId')
                 if series_id and series_id not in attempted_series:
                     attempted_series.add(series_id)
-                    if await bazarr.trigger_series_scan(series_id):
+                    outcome = await bazarr.trigger_series_scan_outcome(series_id)
+                    if outcome is BazarrScanOutcome.CONFIRMED:
                         scanned_series.add(series_id)
                         logger.info(f"[{session_id}] Bazarr: Triggered disk scan for series {series_id}")
+                    elif outcome is BazarrScanOutcome.UNCONFIRMED:
+                        logger.warning(
+                            f"[{session_id}] Bazarr: Scan outcome unconfirmed for series "
+                            f"{series_id}; Bazarr may still be scanning"
+                        )
                     else:
-                        logger.warning(f"[{session_id}] Bazarr: Disk scan failed for series {series_id}")
+                        logger.warning(
+                            f"[{session_id}] Bazarr: Scan not confirmed for series "
+                            f"{series_id} (outcome: {outcome.value})"
+                        )
                 continue
             
             # Try to find matching movie
@@ -223,11 +232,20 @@ async def _notify_bazarr_for_completed_jobs(session_id: str, session: Transcript
                 movie_id = movie.get('radarrId')
                 if movie_id and movie_id not in attempted_movies:
                     attempted_movies.add(movie_id)
-                    if await bazarr.trigger_movie_scan(movie_id):
+                    outcome = await bazarr.trigger_movie_scan_outcome(movie_id)
+                    if outcome is BazarrScanOutcome.CONFIRMED:
                         scanned_movies.add(movie_id)
                         logger.info(f"[{session_id}] Bazarr: Triggered disk scan for movie {movie_id}")
+                    elif outcome is BazarrScanOutcome.UNCONFIRMED:
+                        logger.warning(
+                            f"[{session_id}] Bazarr: Scan outcome unconfirmed for movie "
+                            f"{movie_id}; Bazarr may still be scanning"
+                        )
                     else:
-                        logger.warning(f"[{session_id}] Bazarr: Disk scan failed for movie {movie_id}")
+                        logger.warning(
+                            f"[{session_id}] Bazarr: Scan not confirmed for movie "
+                            f"{movie_id} (outcome: {outcome.value})"
+                        )
         
         total_scans = len(scanned_series) + len(scanned_movies)
         if total_scans > 0:
@@ -239,8 +257,17 @@ async def _notify_bazarr_for_completed_jobs(session_id: str, session: Transcript
             # Fallback to full scan if no specific items found
             # (e.g., files not in Bazarr's library yet)
             logger.info(f"[{session_id}] No matching Bazarr items found, triggering full scan")
-            if not await bazarr.trigger_disk_scan():
-                logger.warning(f"[{session_id}] Bazarr: Full disk scan failed")
+            outcome = await bazarr.trigger_disk_scan_outcome()
+            if outcome is BazarrScanOutcome.UNCONFIRMED:
+                logger.warning(
+                    f"[{session_id}] Bazarr: Full scan outcome unconfirmed; "
+                    "Bazarr may still be scanning"
+                )
+            elif outcome is not BazarrScanOutcome.CONFIRMED:
+                logger.warning(
+                    f"[{session_id}] Bazarr: Full scan not confirmed "
+                    f"(outcome: {outcome.value})"
+                )
             
     except Exception as e:
         logger.warning(f"[{session_id}] Failed to notify Bazarr: {e}")
@@ -424,14 +451,15 @@ async def process_batch_session(session_id: str):
     
     # Refresh media servers (Plex, Jellyfin, Emby) - batched at end of session
     await _refresh_media_servers_for_completed_jobs(session_id, session)
+
+    # Do not let a slow Bazarr scan delay the transcription completion notice.
+    await _notify_batch_completion_once(session_id, session, metadata)
     
     # Notify Bazarr if configured (smart scan based on completed files)
     notify_bazarr = metadata.get('notify_bazarr', True)
     settings = get_settings()
     if notify_bazarr and settings.bazarr.is_configured:
         await _notify_bazarr_for_completed_jobs(session_id, session)
-
-    await _notify_batch_completion_once(session_id, session, metadata)
 
 
 async def _notify_batch_completion_once(

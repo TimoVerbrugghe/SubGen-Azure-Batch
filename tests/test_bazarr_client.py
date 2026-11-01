@@ -8,9 +8,16 @@ Tests cover:
 - Path-based lookups
 """
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
+from app.utils.bazarr_client import (
+    BAZARR_SCAN_CONNECT_TIMEOUT_SECONDS,
+    BAZARR_SCAN_TIMEOUT_SECONDS,
+    BazarrScanOutcome,
+)
 
 
 class TestBazarrClientInit:
@@ -185,6 +192,62 @@ class TestBazarrClientSeriesScan:
             result = await client.trigger_series_scan(series_id=123)
             assert result is True
             mock_aiohttp_session.patch.assert_called_once()
+            assert (
+                mock_aiohttp_session.patch.call_args.kwargs["timeout"].total
+                == BAZARR_SCAN_TIMEOUT_SECONDS
+            )
+            assert (
+                mock_aiohttp_session.patch.call_args.kwargs["timeout"].sock_connect
+                == BAZARR_SCAN_CONNECT_TIMEOUT_SECONDS
+            )
+
+    @pytest.mark.asyncio
+    async def test_trigger_series_scan_timeout_is_unconfirmed_with_diagnostics(
+        self, mock_settings, mock_aiohttp_session, caplog
+    ):
+        """A timeout is unconfirmed because Bazarr may continue processing."""
+        from app.utils.bazarr_client import BazarrClient
+
+        mock_aiohttp_session.patch = MagicMock(side_effect=asyncio.TimeoutError())
+
+        with patch('app.utils.bazarr_client.get_settings', return_value=mock_settings):
+            client = BazarrClient()
+            client._session = mock_aiohttp_session
+
+            with caplog.at_level("ERROR", logger="app.utils.bazarr_client"):
+                result = await client.trigger_series_scan_outcome(series_id=123)
+
+        assert result is BazarrScanOutcome.UNCONFIRMED
+        assert "series 123" in caplog.text
+        assert "outcome unconfirmed" in caplog.text
+        assert "Bazarr may still be scanning" in caplog.text
+        assert f"timeout limit {BAZARR_SCAN_TIMEOUT_SECONDS}s" in caplog.text
+        assert (
+            f"connection limit {BAZARR_SCAN_CONNECT_TIMEOUT_SECONDS}s" in caplog.text
+        )
+        assert "TimeoutError" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_trigger_series_scan_http_error_is_rejected(
+        self, mock_settings, mock_aiohttp_session
+    ):
+        """An explicit HTTP rejection is distinct from an unknown outcome."""
+        from app.utils.bazarr_client import BazarrClient
+
+        mock_response = AsyncMock()
+        mock_response.status = 500
+        mock_response.text = AsyncMock(return_value="server error")
+        mock_response.__aenter__ = AsyncMock(return_value=mock_response)
+        mock_response.__aexit__ = AsyncMock(return_value=None)
+        mock_aiohttp_session.patch = MagicMock(return_value=mock_response)
+
+        with patch('app.utils.bazarr_client.get_settings', return_value=mock_settings):
+            client = BazarrClient()
+            client._session = mock_aiohttp_session
+
+            result = await client.trigger_series_scan_outcome(series_id=123)
+
+        assert result is BazarrScanOutcome.REJECTED
     
     @pytest.mark.asyncio
     async def test_trigger_series_scan_full_update(self, mock_settings, mock_aiohttp_session):

@@ -21,7 +21,11 @@ from fastapi import APIRouter, BackgroundTasks, Form, HTTPException, Request
 from app.config import get_settings
 from app.utils.audio_extractor import extract_audio
 from app.utils.azure_batch_transcriber import AzureBatchTranscriber
-from app.utils.bazarr_client import BazarrClient, notify_bazarr_of_new_subtitle
+from app.utils.bazarr_client import (
+    BazarrClient,
+    BazarrScanOutcome,
+    notify_bazarr_of_new_subtitle,
+)
 from app.utils.language_code import LanguageCode
 from app.utils.media_server_client import (JellyfinClient, PlexClient,
                                            refresh_all_configured_servers)
@@ -161,16 +165,38 @@ async def process_media_file(
                         # We have the Sonarr series ID, use it directly
                         bazarr = BazarrClient(settings.bazarr.url, settings.bazarr.api_key)
                         try:
-                            await bazarr.trigger_series_scan(series_id)
-                            logger.info(f"Notified Bazarr: series scan for ID {series_id}")
+                            outcome = await bazarr.trigger_series_scan_outcome(series_id)
+                            if outcome is BazarrScanOutcome.CONFIRMED:
+                                logger.info(f"Notified Bazarr: series scan for ID {series_id}")
+                            elif outcome is BazarrScanOutcome.UNCONFIRMED:
+                                logger.warning(
+                                    f"Bazarr series scan outcome unconfirmed for ID "
+                                    f"{series_id}; Bazarr may still be scanning"
+                                )
+                            else:
+                                logger.warning(
+                                    f"Bazarr series scan not confirmed for ID {series_id} "
+                                    f"(outcome: {outcome.value})"
+                                )
                         finally:
                             await bazarr.close()
                     elif media_type == "movie" and movie_id:
                         # We have the Radarr movie ID, use it directly
                         bazarr = BazarrClient(settings.bazarr.url, settings.bazarr.api_key)
                         try:
-                            await bazarr.trigger_movie_scan(movie_id)
-                            logger.info(f"Notified Bazarr: movie scan for ID {movie_id}")
+                            outcome = await bazarr.trigger_movie_scan_outcome(movie_id)
+                            if outcome is BazarrScanOutcome.CONFIRMED:
+                                logger.info(f"Notified Bazarr: movie scan for ID {movie_id}")
+                            elif outcome is BazarrScanOutcome.UNCONFIRMED:
+                                logger.warning(
+                                    f"Bazarr movie scan outcome unconfirmed for ID "
+                                    f"{movie_id}; Bazarr may still be scanning"
+                                )
+                            else:
+                                logger.warning(
+                                    f"Bazarr movie scan not confirmed for ID {movie_id} "
+                                    f"(outcome: {outcome.value})"
+                                )
                         finally:
                             await bazarr.close()
                     else:

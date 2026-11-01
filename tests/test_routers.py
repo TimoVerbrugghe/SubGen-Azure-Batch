@@ -184,11 +184,19 @@ class TestBatchNotifications:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("media_type", ["series", "movie", "unmatched"])
-    @pytest.mark.parametrize("scan_results", [(True, True), (False, False), (True, False)])
+    @pytest.mark.parametrize(
+        "scan_outcomes",
+        [
+            ("confirmed", "confirmed"),
+            ("rejected", "rejected"),
+            ("confirmed", "rejected"),
+            ("unconfirmed", "unconfirmed"),
+        ],
+    )
     async def test_should_report_scan_result_without_duplicate_attempts(
-        self, mock_settings, caplog, media_type: str, scan_results: tuple[bool, bool]
+        self, mock_settings, caplog, media_type: str, scan_outcomes: tuple[str, str]
     ) -> None:
-        """Report actual scan results and attempt each target only once."""
+        """Report scan outcomes accurately and attempt each target only once."""
         from app.routers import batch
         from app.transcription_service import (
             JobSource,
@@ -196,6 +204,9 @@ class TestBatchNotifications:
             TranscriptionJob,
             TranscriptionSession,
         )
+        from app.utils.bazarr_client import BazarrScanOutcome
+
+        outcome_values = [BazarrScanOutcome(value) for value in scan_outcomes]
 
         session = TranscriptionSession(id="notification-test")
         for index in range(2):
@@ -208,8 +219,25 @@ class TestBatchNotifications:
             )
             session.jobs[job.id] = job
 
-        mixed = scan_results[0] != scan_results[1]
-        scan_success = scan_results[0]
+        mixed = outcome_values[0] != outcome_values[1]
+        scan_success = outcome_values[0] is BazarrScanOutcome.CONFIRMED
+        events = []
+
+        def scan_side_effect(outcomes: list[BazarrScanOutcome]):
+            index = 0
+
+            async def record_scan(*args) -> BazarrScanOutcome:
+                nonlocal index
+                outcome = outcomes[index]
+                index += 1
+                events.append("scan")
+                return outcome
+
+            return record_scan
+
+        async def record_completion(**kwargs) -> None:
+            events.append("completion")
+
         bazarr = MagicMock()
         bazarr.search_series_by_path = AsyncMock(
             side_effect=[
@@ -227,9 +255,18 @@ class TestBatchNotifications:
                 for index in range(2)
             ]
         )
-        bazarr.trigger_series_scan = AsyncMock(side_effect=scan_results)
-        bazarr.trigger_movie_scan = AsyncMock(side_effect=scan_results)
-        bazarr.trigger_disk_scan = AsyncMock(return_value=scan_success)
+        bazarr.trigger_series_scan_outcome = AsyncMock(
+            side_effect=scan_side_effect(outcome_values)
+        )
+        bazarr.trigger_movie_scan_outcome = AsyncMock(
+            side_effect=scan_side_effect(outcome_values)
+        )
+
+        async def record_full_scan() -> BazarrScanOutcome:
+            events.append("scan")
+            return outcome_values[0]
+
+        bazarr.trigger_disk_scan_outcome = AsyncMock(side_effect=record_full_scan)
         bazarr.close = AsyncMock()
 
         with (
@@ -244,21 +281,29 @@ class TestBatchNotifications:
             patch.object(
                 batch, "_refresh_media_servers_for_completed_jobs", new=AsyncMock()
             ),
+            patch.object(
+                batch, "notify_batch_completion", new=AsyncMock(side_effect=record_completion)
+            ),
             patch.dict(batch._batch_metadata, {}, clear=True),
             caplog.at_level("INFO", logger="app.routers.batch"),
         ):
             await batch.process_batch_session(session.id)
 
         if media_type == "unmatched":
-            bazarr.trigger_disk_scan.assert_awaited_once_with()
-            bazarr.trigger_series_scan.assert_not_awaited()
-            bazarr.trigger_movie_scan.assert_not_awaited()
-            assert ("Bazarr: Full disk scan failed" in caplog.text) == (not scan_success)
+            bazarr.trigger_disk_scan_outcome.assert_awaited_once_with()
+            bazarr.trigger_series_scan_outcome.assert_not_awaited()
+            bazarr.trigger_movie_scan_outcome.assert_not_awaited()
+            if outcome_values[0] is BazarrScanOutcome.UNCONFIRMED:
+                assert "Bazarr: Full scan outcome unconfirmed" in caplog.text
+            elif scan_success:
+                assert "Bazarr: Full scan not confirmed" not in caplog.text
+            else:
+                assert "Bazarr: Full scan not confirmed" in caplog.text
         else:
             scan = (
-                bazarr.trigger_series_scan
+                bazarr.trigger_series_scan_outcome
                 if media_type == "series"
-                else bazarr.trigger_movie_scan
+                else bazarr.trigger_movie_scan_outcome
             )
             target_id = 299 if media_type == "series" else 42
             if mixed:
@@ -268,12 +313,14 @@ class TestBatchNotifications:
                 ]
             else:
                 scan.assert_awaited_once_with(target_id)
-            bazarr.trigger_disk_scan.assert_not_awaited()
+            bazarr.trigger_disk_scan_outcome.assert_not_awaited()
             assert ("Bazarr: Triggered disk scan" in caplog.text) == scan_success
             assert ("Notified Bazarr:" in caplog.text) == scan_success
-            assert ("Bazarr: Disk scan failed" in caplog.text) == (
-                mixed or not scan_success
-            )
+            if BazarrScanOutcome.UNCONFIRMED in outcome_values:
+                assert "Scan outcome unconfirmed" in caplog.text
+                assert "Bazarr may still be scanning" in caplog.text
+            elif mixed or not scan_success:
+                assert "Bazarr: Scan not confirmed" in caplog.text
             if scan_success:
                 expected_count = (
                     "1 series, 0 movies"
@@ -284,6 +331,7 @@ class TestBatchNotifications:
 
         bazarr.close.assert_awaited_once_with()
         assert all(job.status == JobStatus.COMPLETED for job in session.jobs.values())
+        assert events[0] == "completion"
 
 
 class TestWebhookRouter:
