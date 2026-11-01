@@ -70,7 +70,9 @@ async def transcribe_audio(
     video_file: Union[str, None] = Query(default=None),  # For logging (from Bazarr)
     initial_prompt: Union[str, None] = Query(default=None),  # Not used, kept for compatibility
     encode: bool = Query(default=True, description="Encode audio first through ffmpeg"),
-    output: Union[Literal["txt", "vtt", "srt", "tsv", "json"], None] = Query(default="srt"),
+    output: Union[Literal["txt", "vtt", "srt", "tsv", "json"], None] = Query(
+        default="srt"
+    ),
     word_timestamps: bool = Query(default=False, description="Word-level timestamps"),
 ):
     """
