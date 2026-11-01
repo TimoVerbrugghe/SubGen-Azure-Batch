@@ -98,7 +98,7 @@ def azure_storage_container():
 @pytest.fixture
 def mock_settings():
     """Create mock settings for testing without real environment."""
-    from app.config import NotificationConfig
+    from app.config import NotificationConfig, PathMappingConfig
 
     mock_azure = MagicMock()
     mock_azure.speech_key = "test-key"
@@ -118,16 +118,19 @@ def mock_settings():
     mock_plex.server = "http://localhost:32400"
     mock_plex.token = "test-plex-token"
     mock_plex.is_configured = True
+    mock_plex.path_mapping = PathMappingConfig()
     
     mock_jellyfin = MagicMock()
     mock_jellyfin.server = "http://localhost:8096"
     mock_jellyfin.token = "test-jellyfin-token"
     mock_jellyfin.is_configured = True
+    mock_jellyfin.path_mapping = PathMappingConfig()
     
     mock_emby = MagicMock()
     mock_emby.server = "http://localhost:8096"
     mock_emby.token = "test-emby-token"
     mock_emby.is_configured = True
+    mock_emby.path_mapping = PathMappingConfig()
     
     mock_processing = MagicMock()
     mock_processing.process_added_media = True

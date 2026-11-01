@@ -25,9 +25,15 @@ from app.utils.azure_batch_transcriber import (AzureBatchTranscriber,
                                                TranscriptionStatus)
 from app.utils.bazarr_client import BazarrClient, notify_bazarr_of_new_subtitle
 from app.utils.language_code import LanguageCode
-from app.utils.media_server_client import (JellyfinClient, PlexClient,
-                                           refresh_all_configured_servers,
-                                           refresh_by_file_path)
+from app.utils.media_server_client import (
+    JellyfinClient,
+    MediaRefreshContext as MediaRefreshContext,
+    MediaRefreshResult as MediaRefreshResult,
+    MediaServerRefresher as MediaServerRefresher,
+    PlexClient,
+    refresh_all_configured_servers,
+    refresh_by_file_path,
+)
 from app.utils.notification_service import NotificationService, notify_failure
 from app.utils.skip_checker import SkipResult, should_skip_file
 from app.utils.subtitle_utils import (SUBTITLE_EXTENSIONS, append_credit_line,

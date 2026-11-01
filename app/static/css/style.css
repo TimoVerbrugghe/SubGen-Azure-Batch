@@ -163,11 +163,18 @@ body {
 
 .status-badge .status-text {
     font-weight: 500;
+    white-space: nowrap;
 }
 
 .status-badge.loading {
     background: var(--bg-tertiary);
     color: var(--text-secondary);
+}
+
+.status-badge.inactive {
+    background: rgba(128, 128, 128, 0.15);
+    color: var(--text-secondary);
+    border: 1px solid rgba(128, 128, 128, 0.3);
 }
 
 .status-badge.ok {
@@ -984,7 +991,7 @@ body {
     }
 }
 
-@media (max-width: 900px) {
+@media (max-width: 1200px) {
     .header {
         position: relative;
     }
@@ -1013,7 +1020,7 @@ body {
     }
 }
 
-@media (min-width: 901px) {
+@media (min-width: 1201px) {
     .status-menu {
         display: none !important;
     }

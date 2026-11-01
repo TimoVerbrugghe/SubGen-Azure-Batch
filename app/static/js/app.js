@@ -181,12 +181,16 @@ class SubGenApp {
     /**
      * Update a status badge by its base ID, syncing both desktop and mobile versions.
      */
-    updateStatusBadge(baseId, className, title) {
+    updateStatusBadge(baseId, className, title, text = null) {
         for (const id of [baseId, `${baseId}-mobile`]) {
             const el = document.getElementById(id);
             if (el) {
                 el.className = className;
                 el.title = title;
+                if (text !== null) {
+                    const label = el.querySelector('.status-text');
+                    if (label) label.textContent = text;
+                }
             }
         }
     }
@@ -202,9 +206,11 @@ class SubGenApp {
     }
     
     async checkConfig() {
+        let statusChecked = false;
         try {
-            // Check service status (speech + storage)
+            // Check authenticated service connectivity.
             const statusResponse = await fetch('/api/status');
+            if (!statusResponse.ok) throw new Error(`Status check failed: HTTP ${statusResponse.status}`);
             const status = await statusResponse.json();
             
             // Update Speech status badge
@@ -224,6 +230,19 @@ class SubGenApp {
             } else {
                 this.updateStatusBadge('storage-status', 'status-badge error', `Azure Storage: ${status.storage.error || 'Connection failed'}`);
             }
+
+            for (const [server, name] of [['plex', 'Plex'], ['jellyfin', 'Jellyfin']]) {
+                const connection = status[server];
+                const state = !connection.configured ? 'No API key' : connection.connected ? 'Connected' : 'Connection failed';
+                const badgeClass = !connection.configured ? 'inactive' : connection.connected ? 'ok' : 'error';
+                this.updateStatusBadge(
+                    `${server}-status`,
+                    `status-badge ${badgeClass}`,
+                    `${name}: ${connection.error || state}`,
+                    `${name}: ${state}`,
+                );
+            }
+            statusChecked = true;
             
             // Get config for integrations
             const configResponse = await fetch('/api/config');
@@ -254,8 +273,13 @@ class SubGenApp {
             
         } catch (error) {
             console.error('Failed to check config:', error);
-            this.updateStatusBadge('speech-status', 'status-badge error', 'Connection Error');
-            this.updateStatusBadge('storage-status', 'status-badge error', 'Connection Error');
+            if (!statusChecked) {
+                this.updateStatusBadge('speech-status', 'status-badge error', 'Connection Error');
+                this.updateStatusBadge('storage-status', 'status-badge error', 'Connection Error');
+                for (const [server, name] of [['plex', 'Plex'], ['jellyfin', 'Jellyfin']]) {
+                    this.updateStatusBadge(`${server}-status`, 'status-badge error', 'Unable to check service status', `${name}: Unknown`);
+                }
+            }
             this.updateStatusBadge('notification-status', 'status-badge warning', 'Notifications: Unknown');
         }
     }
@@ -844,7 +868,7 @@ class SubGenApp {
             const statusClass = session.failed > 0 ? 'has-errors' : 
                                (session.completed === session.total_jobs || !inProgress) ? 'complete' : 'in-progress';
             
-            const sourceLabel = session.source === 'bazarr' ? 'Bazarr' : 'Batch';
+            const sourceLabel = {bazarr: 'Bazarr', webhook: 'Webhook', api: 'API', ui: 'Batch'}[session.source] || 'Batch';
             const sourceClass = session.source === 'bazarr' ? 'source-bazarr' : 'source-ui';
             
             // Show cancel button only for in-progress sessions
@@ -922,16 +946,24 @@ class SubGenApp {
             
             // Show media server refresh status for completed jobs
             let refreshHtml = '';
-            if (job.status === 'completed' && job.media_refresh_status) {
+            if (job.status === 'completed' && job.media_refresh_results) {
+                const entries = Object.entries(job.media_refresh_results);
+                const hasFailure = entries.some(([_, result]) => result.status !== 'queued');
+                const title = entries.map(([server, result]) =>
+                    `${server}: ${result.status}${result.error ? ` (${result.error})` : ''}`
+                ).join('; ');
+                if (entries.length > 0) {
+                    refreshHtml = `<span class="job-refresh ${hasFailure ? 'warning' : 'success'}" title="${this.escapeHtml(title)}">${hasFailure ? '⚠️' : '🔄'}</span>`;
+                }
+            } else if (job.status === 'completed' && job.media_refresh_status) {
                 const entries = Object.entries(job.media_refresh_status);
                 const refreshed = entries.filter(([_, success]) => success).map(([server]) => server);
                 const failed = entries.filter(([_, success]) => !success).map(([server]) => server);
                 
-                if (refreshed.length > 0) {
-                    refreshHtml = `<span class="job-refresh success" title="Refreshed: ${refreshed.join(', ')}">🔄</span>`;
-                } else if (failed.length > 0) {
-                    // Media servers configured but item not found
-                    refreshHtml = `<span class="job-refresh warning" title="Not found in: ${failed.join(', ')}">⚠️</span>`;
+                if (failed.length > 0) {
+                    refreshHtml = `<span class="job-refresh warning" title="Refresh failed: ${failed.join(', ')}; queued: ${refreshed.join(', ')}">⚠️</span>`;
+                } else if (refreshed.length > 0) {
+                    refreshHtml = `<span class="job-refresh success" title="Refresh queued: ${refreshed.join(', ')}">🔄</span>`;
                 }
             }
             

@@ -135,6 +135,8 @@ class JobStatusResponse(BaseModel):
     progress: int
     error: Optional[str] = None
     srt_path: Optional[str] = None
+    media_refresh_status: dict[str, bool] | None = None
+    media_refresh_results: dict[str, dict[str, str | None]] | None = None
 
 
 class SessionStatusResponse(BaseModel):
@@ -275,107 +277,12 @@ async def _notify_bazarr_for_completed_jobs(session_id: str, session: Transcript
         await bazarr.close()
 
 
-async def _refresh_media_servers_for_completed_jobs(session_id: str, session: TranscriptionSession):
-    """
-    Refresh media servers for all completed jobs in a batch session.
-    
-    Groups completed files by parent directory to minimize API calls:
-    - Plex: One partial scan per unique parent directory
-    - Jellyfin/Emby: One refresh per unique parent directory
-    """
-    from pathlib import Path
-
-    from app.utils.media_server_client import JellyfinClient, PlexClient
-    
-    settings = get_settings()
-    
-    # Collect completed file paths
-    completed_paths = [
-        job.file_path for job in session.jobs.values()
-        if job.status == JobStatus.COMPLETED
-    ]
-    
-    if not completed_paths:
-        logger.debug(f"[{session_id}] No completed jobs, skipping media server refresh")
-        return
-    
-    # Group by parent directory to minimize scans
-    unique_dirs = set(str(Path(p).parent) for p in completed_paths)
-    logger.info(f"[{session_id}] Refreshing media servers for {len(unique_dirs)} directories")
-    
-    # Refresh Plex
-    if settings.plex.is_configured:
-        try:
-            plex = PlexClient()
-            sections = await plex.get_library_sections()
-            refreshed_sections: set = set()
-            
-            for dir_path in unique_dirs:
-                for section in sections:
-                    for location in section.get("locations", []):
-                        if dir_path.startswith(location):
-                            section_key = section["key"]
-                            # Only refresh each section/path once
-                            cache_key = f"{section_key}:{dir_path}"
-                            if cache_key not in refreshed_sections:
-                                await plex.refresh_section_path(section_key, dir_path)
-                                refreshed_sections.add(cache_key)
-                            break
-            
-            if refreshed_sections:
-                logger.info(f"[{session_id}] Plex: Refreshed {len(refreshed_sections)} paths")
-            
-            await plex.close()
-        except Exception as e:
-            logger.warning(f"[{session_id}] Plex refresh failed: {e}")
-    
-    # Refresh Jellyfin
-    if settings.jellyfin.is_configured:
-        try:
-            jellyfin = JellyfinClient()
-            # Jellyfin refresh works by file path - refresh one file per directory
-            refreshed_count = 0
-            for file_path in completed_paths:
-                # Only need to refresh one file per unique directory
-                parent_dir = str(Path(file_path).parent)
-                if parent_dir in unique_dirs:
-                    result = await jellyfin.refresh_by_file_path(file_path)
-                    if result:
-                        refreshed_count += 1
-                    # Remove from set so we don't refresh same dir again
-                    unique_dirs.discard(parent_dir)
-                    if not unique_dirs:
-                        break
-            if refreshed_count:
-                logger.info(f"[{session_id}] Jellyfin: Refreshed {refreshed_count} items")
-            await jellyfin.close()
-            # Restore unique_dirs for Emby
-            unique_dirs = set(str(Path(p).parent) for p in completed_paths)
-        except Exception as e:
-            logger.warning(f"[{session_id}] Jellyfin refresh failed: {e}")
-    
-    # Refresh Emby
-    if settings.emby.is_configured:
-        try:
-            emby = JellyfinClient(is_emby=True)
-            # Emby refresh works by file path - refresh one file per directory
-            refreshed_count = 0
-            for file_path in completed_paths:
-                # Only need to refresh one file per unique directory
-                parent_dir = str(Path(file_path).parent)
-                if parent_dir in unique_dirs:
-                    result = await emby.refresh_by_file_path(file_path)
-                    if result:
-                        refreshed_count += 1
-                    # Remove from set so we don't refresh same dir again
-                    unique_dirs.discard(parent_dir)
-                    if not unique_dirs:
-                        break
-            if refreshed_count:
-                logger.info(f"[{session_id}] Emby: Refreshed {refreshed_count} items")
-            await emby.close()
-        except Exception as e:
-            logger.warning(f"[{session_id}] Emby refresh failed: {e}")
+async def _refresh_media_servers_for_completed_jobs(
+    session_id: str, session: TranscriptionSession
+) -> None:
+    """Refresh saved jobs lacking an outcome; never duplicate post-save requests."""
+    for job in session.jobs.values():
+        await TranscriptionService.refresh_saved_job(session, job)
 
 
 async def process_batch_job(session_id: str, job_id: str):
@@ -396,7 +303,7 @@ async def process_batch_job(session_id: str, job_id: str):
     try:
         # Use TranscriptionService to process the job
         # The service handles: audio extraction, upload, transcription, cleanup
-        # Media server refresh is done at session end, not per-job
+        # The service refreshes media servers after each saved video subtitle.
         result, updated_job = await TranscriptionService.transcribe_file(
             file_path=job.file_path,
             language=job.language,
@@ -449,7 +356,7 @@ async def process_batch_session(session_id: str):
     workers = [asyncio.create_task(worker()) for _ in range(worker_count)]
     await asyncio.gather(*workers, return_exceptions=True)
     
-    # Refresh media servers (Plex, Jellyfin, Emby) - batched at end of session
+    # Only jobs missing a post-save outcome need an end-of-session refresh.
     await _refresh_media_servers_for_completed_jobs(session_id, session)
 
     # Do not let a slow Bazarr scan delay the transcription completion notice.
@@ -666,6 +573,8 @@ async def get_session_status(session_id: str):
             progress=0,
             error=job.error,
             srt_path=job.srt_path,
+            media_refresh_status=job.media_refresh_status,
+            media_refresh_results=job.media_refresh_results,
         )
         for job in session.jobs.values()
     ]
@@ -707,6 +616,8 @@ async def get_job_status(session_id: str, job_id: str):
         progress=0,
         error=job.error,
         srt_path=job.srt_path,
+        media_refresh_status=job.media_refresh_status,
+        media_refresh_results=job.media_refresh_results,
     )
 
 

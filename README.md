@@ -101,15 +101,45 @@ Web UI batches notify Bazarr after all jobs finish, with one scan attempt per un
 
 ## Plex
 
-Create a webhook in Plex that will call back to your SubGen-Azure-Batch address, e.g., http://192.168.1.111:9000/plex. See: https://support.plex.tv/articles/115002267687-webhooks/
+Set `PLEX_SERVER` and `PLEX_TOKEN` to enable automatic refresh after SubGen saves a video subtitle. Web UI and agent/API batches do **not** require a webhook.
 
-You will also need to generate a token. Remember, Plex and SubGen-Azure-Batch need to be able to see the exact same files at the exact same paths, otherwise you need `USE_PATH_MAPPING`.
+To also start subtitle generation when media is added or played, optionally configure a Plex webhook pointing to `http://subgen:9000/webhook/plex` and enable `PROCESS_ADDED_MEDIA` or `PROCESS_MEDIA_ON_PLAY`. See [Plex webhooks](https://support.plex.tv/articles/115002267687-webhooks/). A webhook's movie/episode rating key is retained for an item refresh; without an ID, SubGen discovers the matching library section and requests a partial scan of the media file's parent directory.
+
+## Jellyfin
+
+Set `JELLYFIN_SERVER` and `JELLYFIN_TOKEN` (a dedicated key from **Dashboard -> API Keys**) to enable post-save refresh. Optionally install/configure the Webhook plugin to send `ItemAdded` or `PlaybackStart` events to `http://subgen:9000/webhook/jellyfin`; include `ItemId`, `ItemType`, and `Path` in its JSON template (nested `Item.Id`, `Item.Type`, and `Item.Path` are also supported).
+
+In the plugin, choose **Add Generic Destination**, enable **Send All Properties** and the desired events, and add a `Content-Type: application/json` request header.
+
+Webhook IDs identify individual movies/episodes. For batches and jobs originating on another server, SubGen builds a paginated, session-scoped index of exact media paths, including alternate media-source paths. It refreshes **each episode**, even when episodes share a season folder. Titles/filenames are not used to guess IDs; missing and ambiguous matches are reported.
+
+### Refresh behavior and path mapping
+
+All configured media servers are contacted independently after each successful video subtitle save. Tokens are sent in HTTP headers. Refresh options do not request metadata/image replacement, and no full-library scan is used as a fallback. Failed, cancelled, response-only `/asr`, and audio/LRC jobs do not trigger refresh. Bazarr saves `/asr` responses itself, so its refresh must be handled after Bazarr's save rather than prematurely by SubGen.
+
+The UI displays per-server `queued`, `not_found`, or `failed` outcomes, including mixed success/failure. A queued request is **not** confirmation that the server has indexed the subtitle; clients may need to reopen the subtitle selector. Refresh failures never make a completed transcription fail. Requests use 30-second timeouts and at most three attempts for connection failures or transient HTTP responses; invalid credentials are not retried.
+
+The header and compact-screen status menu also show **Plex/Jellyfin connection badges**: green **Connected**, grey **No API key**, or red **Connection failed** when a key is provided but authentication/connectivity fails (including a missing server URL). On page load, `/api/status` verifies environment credentials using authenticated, read-only requests (`GET /library/sections` for Plex and `GET /System/Info` for Jellyfin). Each check has a 10-second timeout; hover for failure details. A red badge alone does not prove the key is wrong: the server may be unreachable or permissions insufficient. For these media-server status fields, `configured` indicates that a nonblank key is provided. Checks do not trigger scans, expose tokens, or require Azure configuration. Connected confirms read access, not that a particular subtitle has been indexed or that every refresh operation is authorized. Reload the page to recheck after changing configuration/restarting the service.
+
+If container mounts differ, set each server's mapping from the **SubGen-visible** root to the **server-visible** root:
+
+```dotenv
+# SubGen sees /media/tv/Show/episode.mkv
+PLEX_PATH_MAPPING_FROM=/media
+PLEX_PATH_MAPPING_TO=/data
+JELLYFIN_PATH_MAPPING_FROM=/media
+JELLYFIN_PATH_MAPPING_TO=/mnt/library
+```
+
+Set both values or neither. Mappings match directory boundaries, not arbitrary string prefixes, and support POSIX and Windows server paths. The same per-server mapping is reversed for incoming webhooks, while the original server path is retained for refresh. The legacy `USE_PATH_MAPPING` / `PATH_MAPPING_FROM` / `PATH_MAPPING_TO` configuration still works: it maps server -> SubGen on input and is reversed for refresh when no per-server mapping is set. Both servers must be able to read the generated subtitle beside the same underlying media file.
+
+Library/path indexes are reused within a transcription session, but refresh requests are repeated after later subtitle writes: an earlier directory scan cannot be assumed to discover subtitles written afterwards.
 
 ## Emby
 
-All you need to do is create a webhook in Emby pointing to your SubGen-Azure-Batch, e.g., `http://192.168.1.154:9000/emby`, set `Request content type` to `multipart/form-data` and configure your desired events (usually `New Media Added`, `Start`, and `Unpause`). See https://github.com/McCloudS/subgen/discussions/115#discussioncomment-10569277 for screenshot examples.
+Configure an Emby webhook at `http://subgen:9000/webhook/emby` with a JSON payload containing `Event` and `Item` (`Id`, `Type`, `Path`). Supported events are `library.new` and `playback.start`, controlled by `PROCESS_ADDED_MEDIA` and `PROCESS_MEDIA_ON_PLAY`.
 
-Emby provides good information in their responses, so we don't need to add an API token or server URL to query for more information.
+Set `EMBY_SERVER` and `EMBY_TOKEN` for post-save refresh; incoming webhook metadata alone does not authorize outbound refresh API calls. Optional `EMBY_PATH_MAPPING_FROM` / `EMBY_PATH_MAPPING_TO` follow the same mapping rules as Plex/Jellyfin.
 
 Remember, Emby and SubGen-Azure-Batch need to be able to see the exact same files at the exact same paths, otherwise you need `USE_PATH_MAPPING`.
 
@@ -117,7 +147,7 @@ Remember, Emby and SubGen-Azure-Batch need to be able to see the exact same file
 
 Create the webhooks in Tautulli with the following settings:
 
-- **Webhook URL:** http://yourdockerip:9000/tautulli
+- **Webhook URL:** http://yourdockerip:9000/webhook/tautulli
 - **Webhook Method:** POST
 - **Triggers:** Whatever you want, but you'll likely want "Playback Start" and "Recently Added"
 
@@ -154,14 +184,6 @@ Create the webhooks in Tautulli with the following settings:
     "mediatype":"{media_type}"
 }
 ```
-
-## Jellyfin
-
-First, you need to install the Jellyfin webhooks plugin. Then click "Add Generic Destination", name it anything you want, webhook URL is your SubGen-Azure-Batch info (e.g., http://192.168.1.154:9000/jellyfin). Next, check Item Added, Playback Start, and Send All Properties. Last, "Add Request Header" and add the Key: `Content-Type` Value: `application/json`
-
-Click Save and you should be all set!
-
-Remember, Jellyfin and SubGen-Azure-Batch need to be able to see the exact same files at the exact same paths, otherwise you need `USE_PATH_MAPPING`.
 
 ## Variables
 
@@ -222,10 +244,16 @@ The following environment variables are available in Docker. They will default t
 | **Media Server Integration** |   |   |
 | PLEX_SERVER | '' | Your local Plex server address (e.g., http://plex:32400) |
 | PLEX_TOKEN | '' | Your Plex token (see: https://support.plex.tv/articles/204059436-finding-an-authentication-token-x-plex-token/) |
+| PLEX_PATH_MAPPING_FROM | '' | Optional SubGen-visible media root; requires `PLEX_PATH_MAPPING_TO` |
+| PLEX_PATH_MAPPING_TO | '' | Corresponding Plex-visible root; reversed for incoming Plex webhooks |
 | JELLYFIN_SERVER | '' | Your Jellyfin server address (e.g., http://jellyfin:8096) |
-| JELLYFIN_TOKEN | '' | Generate a token inside the Jellyfin interface |
+| JELLYFIN_TOKEN | '' | Dedicated API key from Jellyfin Dashboard -> API Keys |
+| JELLYFIN_PATH_MAPPING_FROM | '' | Optional SubGen-visible media root; requires `JELLYFIN_PATH_MAPPING_TO` |
+| JELLYFIN_PATH_MAPPING_TO | '' | Corresponding Jellyfin-visible root; reversed for incoming Jellyfin webhooks |
 | EMBY_SERVER | '' | Your Emby server address |
 | EMBY_TOKEN | '' | Your Emby API token |
+| EMBY_PATH_MAPPING_FROM | '' | Optional SubGen-visible media root; requires `EMBY_PATH_MAPPING_TO` |
+| EMBY_PATH_MAPPING_TO | '' | Corresponding Emby-visible root; reversed for incoming Emby webhooks |
 | **Bazarr Integration** |   |   |
 | BAZARR_URL | '' | **(New)** Bazarr server URL for notifications (e.g., http://bazarr:6767) |
 | BAZARR_API_KEY | '' | **(New)** Bazarr API key for notifications |
@@ -382,14 +410,15 @@ network or add authentication at the ingress for those routes.
 | -------- | ----------- |
 | `GET /` | Web UI |
 | `GET /health` | Health check |
+| `GET /api/status` | Azure connectivity and authenticated Plex/Jellyfin connection checks (no tokens returned) |
 | `GET /status` | Returns SubGen-Azure-Batch version |
 | `POST /asr` | Bazarr-compatible ASR endpoint (returns SRT) |
 | `GET /detect-language` | Language detection endpoint (Bazarr compatibility) |
 | `POST /detect-language` | Language detection with audio upload (uses Azure language identification) |
-| `POST /plex` | Plex webhook |
-| `POST /jellyfin` | Jellyfin webhook |
-| `POST /emby` | Emby webhook |
-| `POST /tautulli` | Tautulli webhook |
+| `POST /webhook/plex` | Plex generation webhook; optional for post-save refresh |
+| `POST /webhook/jellyfin` | Jellyfin generation webhook; optional for post-save refresh |
+| `POST /webhook/emby` | Emby generation webhook |
+| `POST /webhook/tautulli` | Tautulli generation webhook |
 | `POST /api/batch/submit` | Submit batch transcription via API |
 | `GET /api/batch/sessions/{id}` | Get session status |
 | `POST /api/agent/batches` | Submit a secured agent batch (requires `X-API-Key`) |

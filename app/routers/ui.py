@@ -7,6 +7,7 @@ Provides routes for:
 - Configuration display
 """
 
+import asyncio
 import logging
 import os
 from pathlib import Path
@@ -19,6 +20,7 @@ from pydantic import BaseModel
 
 from app.config import SUBGEN_AZURE_BATCH_VERSION, get_settings
 from app.utils.language_code import LanguageCode
+from app.utils.media_server_client import JellyfinClient, PlexClient
 
 # Optional Azure imports (may not be installed in all environments)
 try:
@@ -74,9 +76,11 @@ class ServiceStatus(BaseModel):
 
 
 class StatusResponse(BaseModel):
-    """Combined status response for all Azure services."""
+    """Connection status for Azure services and configured media servers."""
     speech: ServiceStatus
     storage: ServiceStatus
+    plex: ServiceStatus
+    jellyfin: ServiceStatus
 
 
 # Import media extensions from audio_extractor for consistency
@@ -172,9 +176,9 @@ async def get_config():
 @router.get("/api/status", response_model=StatusResponse)
 async def check_status():
     """
-    Check connectivity to Azure Speech and Storage services.
+    Check connectivity to Azure services and authenticate Plex/Jellyfin credentials.
     
-    Returns connection status for both services, including any error messages.
+    Media-server checks are read-only and never refresh a library.
     """
     import aiohttp
     settings = get_settings()
@@ -224,10 +228,24 @@ async def check_status():
                     storage_status.error = f"Container '{settings.azure.storage_container}' not found"
                 else:
                     storage_status.error = error_msg[:80]
-    
+
+    plex_status, jellyfin_status = await asyncio.gather(
+        PlexClient().check_connection(),
+        JellyfinClient().check_connection(),
+    )
     return StatusResponse(
         speech=speech_status,
         storage=storage_status,
+        plex=ServiceStatus(
+            configured=plex_status.configured,
+            connected=plex_status.connected,
+            error=plex_status.error,
+        ),
+        jellyfin=ServiceStatus(
+            configured=jellyfin_status.configured,
+            connected=jellyfin_status.connected,
+            error=jellyfin_status.error,
+        ),
     )
 
 

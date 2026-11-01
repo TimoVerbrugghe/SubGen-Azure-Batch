@@ -5,6 +5,7 @@ Uses FastAPI TestClient to test router endpoints.
 Comprehensive tests for UI, ASR, Batch, and Webhook routers.
 """
 
+import json
 import os
 import tempfile
 from pathlib import Path
@@ -21,6 +22,79 @@ from fastapi.testclient import TestClient
 
 class TestUIRouter:
     """Test UI router endpoints."""
+
+    @pytest.mark.parametrize(
+        ("plex_outcome", "jellyfin_outcome"),
+        [
+            ("connected", "connected"),
+            ("failed", "connected"),
+            ("unconfigured", "unconfigured"),
+        ],
+    )
+    def test_should_include_independent_authenticated_media_status_without_azure_config(
+        self, plex_outcome, jellyfin_outcome, app_client, mock_settings
+    ):
+        from app.routers import ui
+        from app.utils.media_server_client import MediaConnectionStatus
+
+        mock_settings.azure.speech_key = ""
+        mock_settings.azure.storage_connection_string = ""
+        outcomes = [
+            MediaConnectionStatus(
+                configured=outcome != "unconfigured",
+                connected=outcome == "connected",
+                error="Invalid token or insufficient permissions"
+                if outcome == "failed"
+                else None,
+            )
+            for outcome in (plex_outcome, jellyfin_outcome)
+        ]
+        with (
+            patch.object(ui, "get_settings", return_value=mock_settings),
+            patch.object(
+                ui.PlexClient,
+                "check_connection",
+                new=AsyncMock(return_value=outcomes[0]),
+            ) as plex,
+            patch.object(
+                ui.JellyfinClient,
+                "check_connection",
+                new=AsyncMock(return_value=outcomes[1]),
+            ) as jellyfin,
+        ):
+            response = app_client.get("/api/status")
+        assert response.status_code == 200
+        assert response.json() == {
+            "speech": {"configured": False, "connected": False, "error": None},
+            "storage": {"configured": False, "connected": False, "error": None},
+            "plex": {
+                "configured": outcomes[0].configured,
+                "connected": outcomes[0].connected,
+                "error": outcomes[0].error,
+            },
+            "jellyfin": {
+                "configured": outcomes[1].configured,
+                "connected": outcomes[1].connected,
+                "error": outcomes[1].error,
+            },
+        }
+        plex.assert_awaited_once_with()
+        jellyfin.assert_awaited_once_with()
+        assert mock_settings.plex.token not in response.text
+        assert mock_settings.jellyfin.token not in response.text
+
+    def test_should_show_media_connection_badges_in_desktop_and_compact_status_menu(
+        self, app_client, mock_settings
+    ):
+        response = app_client.get("/")
+        assert response.status_code == 200
+        for badge in (
+            "plex-status",
+            "jellyfin-status",
+            "plex-status-mobile",
+            "jellyfin-status-mobile",
+        ):
+            assert f'id="{badge}"' in response.text
     
     @pytest.fixture
     def client(self):
@@ -336,6 +410,139 @@ class TestBatchNotifications:
 
 class TestWebhookRouter:
     """Test webhook router endpoints."""
+
+    @pytest.mark.parametrize("server", ["plex", "jellyfin", "emby"])
+    def test_should_carry_webhook_item_id_and_original_path_into_background_job(
+        self, server, app_client, mock_settings, patched_settings, temp_video_file
+    ):
+        from app.config import PathMappingConfig
+        from app.routers import webhooks
+
+        local_root = str(Path(temp_video_file).parent)
+        server_path = f"/server/{Path(temp_video_file).name}"
+        getattr(mock_settings, server).path_mapping = PathMappingConfig(
+            enabled=True, from_path=local_root, to_path="/server"
+        )
+        if server == "plex":
+            request_args = {
+                "data": {
+                    "payload": json.dumps(
+                        {
+                            "event": "library.new",
+                            "Metadata": {
+                                "type": "episode",
+                                "ratingKey": "123",
+                                "Media": [{"Part": [{"file": server_path}]}],
+                            },
+                        }
+                    )
+                }
+            }
+        elif server == "jellyfin":
+            request_args = {
+                "json": {
+                    "NotificationType": "ItemAdded",
+                    "ItemId": "123",
+                    "ItemType": "Episode",
+                    "Path": server_path,
+                }
+            }
+        else:
+            request_args = {
+                "json": {
+                    "Event": "library.new",
+                    "Item": {"Id": "123", "Type": "Episode", "Path": server_path},
+                }
+            }
+        with (
+            patch.object(webhooks, "get_settings", return_value=mock_settings),
+            patch.object(webhooks, "process_media_file", new=AsyncMock()) as process,
+            patch.dict(webhooks._active_jobs, {}, clear=True),
+        ):
+            response = app_client.post(f"/webhook/{server}", **request_args)
+        assert response.status_code == 200
+        assert response.json() == {"status": "processing"}
+        process.assert_awaited_once()
+        assert process.call_args.kwargs["file_path"] == temp_video_file
+        assert process.call_args.kwargs[f"{server}_item_id"] == "123"
+        assert process.call_args.kwargs["server_paths"] == {server: server_path}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("skip", [False, True])
+    async def test_should_route_webhook_through_shared_service_and_release_duplicate_tracking(
+        self, skip, mock_settings, temp_video_file
+    ):
+        from app.routers import webhooks
+        from app.transcription_service import JobSource
+        from app.utils.skip_checker import SkipResult
+
+        mock_settings.bazarr.is_configured = False
+        result = MagicMock()
+        job = MagicMock(srt_path=f"{temp_video_file}.eng.srt")
+        with (
+            patch.object(webhooks, "get_settings", return_value=mock_settings),
+            patch.object(
+                webhooks,
+                "should_skip_file",
+                new=AsyncMock(return_value=SkipResult(skip, "existing subtitles")),
+            ) as skip_check,
+            patch.object(webhooks, "get_audio_tracks", new=AsyncMock(return_value=[])),
+            patch.object(
+                webhooks.TranscriptionService,
+                "transcribe_file",
+                new=AsyncMock(return_value=(result, job)),
+            ) as transcribe,
+            patch.dict(webhooks._active_jobs, {temp_video_file: True}, clear=True),
+        ):
+            await webhooks.process_media_file(
+                temp_video_file,
+                plex_item_id="123",
+                server_paths={"plex": "/server/episode.mkv"},
+            )
+            assert temp_video_file not in webhooks._active_jobs
+        skip_check.assert_awaited_once_with(temp_video_file, "en")
+        if skip:
+            transcribe.assert_not_awaited()
+        else:
+            transcribe.assert_awaited_once()
+            assert transcribe.call_args.kwargs["source"] == JobSource.WEBHOOK
+            context = transcribe.call_args.kwargs["media_refresh_context"]
+            assert context.item_ids == {"plex": "123"}
+            assert context.server_paths == {"plex": "/server/episode.mkv"}
+
+    def test_should_return_503_for_generation_webhook_without_azure(
+        self, app_client, mock_settings, patched_settings
+    ):
+        from app.routers import webhooks
+
+        mock_settings.azure.is_configured = False
+        with patch.object(webhooks, "get_settings", return_value=mock_settings):
+            response = app_client.post(
+                "/webhook/jellyfin", json={"NotificationType": "ItemAdded"}
+            )
+        assert response.status_code == 503
+        assert "Azure Speech Services not configured" in response.json()["detail"]
+
+    def test_should_return_asr_subtitles_without_premature_media_refresh(
+        self, app_client, mock_settings, patched_settings, mock_transcription_result
+    ):
+        from app.transcription_service import TranscriptionService
+
+        with (
+            patch.object(
+                TranscriptionService,
+                "transcribe_audio_data",
+                new=AsyncMock(return_value=(mock_transcription_result, MagicMock())),
+            ),
+            patch("app.transcription_service.MediaServerRefresher") as refresh,
+        ):
+            response = app_client.post(
+                "/asr?language=en&output=srt",
+                files={"audio_file": ("audio.wav", b"audio", "audio/wav")},
+            )
+        assert response.status_code == 200
+        assert response.text == mock_transcription_result.to_srt()
+        refresh.assert_not_called()
     
     @pytest.fixture
     def client(self):

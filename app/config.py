@@ -7,6 +7,7 @@ Loads configuration from environment variables with sensible defaults.
 import os
 from dataclasses import dataclass, field
 from functools import lru_cache
+from pathlib import PurePath, PurePosixPath, PureWindowsPath
 from typing import List, Optional
 
 # Version - read from environment (set in Dockerfile) or default
@@ -23,6 +24,13 @@ def get_list(value: str, separator: str = ",") -> List[str]:
     if not value:
         return []
     return [item.strip() for item in value.split(separator) if item.strip()]
+
+
+def get_media_path(path: str) -> PurePath:
+    """Parse a server-visible path without depending on the host OS."""
+    if "\\" in path or PureWindowsPath(path).drive:
+        return PureWindowsPath(path)
+    return PurePosixPath(path)
 
 
 @dataclass
@@ -69,6 +77,7 @@ class PlexConfig:
 
     token: str = ""
     server: str = ""
+    path_mapping: "PathMappingConfig" = field(default_factory=lambda: PathMappingConfig())
 
     @property
     def is_configured(self) -> bool:
@@ -82,6 +91,7 @@ class JellyfinConfig:
 
     token: str = ""
     server: str = ""
+    path_mapping: "PathMappingConfig" = field(default_factory=lambda: PathMappingConfig())
 
     @property
     def is_configured(self) -> bool:
@@ -95,6 +105,7 @@ class EmbyConfig:
 
     token: str = ""
     server: str = ""
+    path_mapping: "PathMappingConfig" = field(default_factory=lambda: PathMappingConfig())
 
     @property
     def is_configured(self) -> bool:
@@ -132,9 +143,15 @@ class PathMappingConfig:
 
     def apply(self, path: str) -> str:
         """Apply path mapping if enabled."""
-        if self.enabled and self.from_path:
-            return path.replace(self.from_path, self.to_path)
-        return path
+        if not self.enabled:
+            return path
+        if not self.from_path or not self.to_path:
+            raise ValueError("Path mapping requires both FROM and TO paths")
+        source = get_media_path(self.from_path)
+        candidate = get_media_path(path)
+        if not candidate.is_relative_to(source):
+            return path
+        return str(get_media_path(self.to_path).joinpath(*candidate.relative_to(source).parts))
 
 
 @dataclass
@@ -365,9 +382,7 @@ class Settings:
             # Server settings
             debug=get_bool(os.getenv("DEBUG", "false")),
             agent_api_key=os.getenv("AGENT_API_KEY", ""),
-            agent_mcp_allowed_hosts=get_list(
-                os.getenv("AGENT_MCP_ALLOWED_HOSTS", "")
-            ),
+            agent_mcp_allowed_hosts=get_list(os.getenv("AGENT_MCP_ALLOWED_HOSTS", "")),
             # UI settings
             default_theme=os.getenv("DEFAULT_THEME", "dark"),
             # Media settings
@@ -459,16 +474,40 @@ class Settings:
             plex=PlexConfig(
                 token=os.getenv("PLEX_TOKEN", ""),
                 server=os.getenv("PLEX_SERVER", ""),
+                path_mapping=PathMappingConfig(
+                    enabled=bool(
+                        os.getenv("PLEX_PATH_MAPPING_FROM", "")
+                        or os.getenv("PLEX_PATH_MAPPING_TO", "")
+                    ),
+                    from_path=os.getenv("PLEX_PATH_MAPPING_FROM", ""),
+                    to_path=os.getenv("PLEX_PATH_MAPPING_TO", ""),
+                ),
             ),
             # Jellyfin configuration
             jellyfin=JellyfinConfig(
                 token=os.getenv("JELLYFIN_TOKEN", ""),
                 server=os.getenv("JELLYFIN_SERVER", ""),
+                path_mapping=PathMappingConfig(
+                    enabled=bool(
+                        os.getenv("JELLYFIN_PATH_MAPPING_FROM", "")
+                        or os.getenv("JELLYFIN_PATH_MAPPING_TO", "")
+                    ),
+                    from_path=os.getenv("JELLYFIN_PATH_MAPPING_FROM", ""),
+                    to_path=os.getenv("JELLYFIN_PATH_MAPPING_TO", ""),
+                ),
             ),
             # Emby configuration
             emby=EmbyConfig(
                 token=os.getenv("EMBY_TOKEN", ""),
                 server=os.getenv("EMBY_SERVER", ""),
+                path_mapping=PathMappingConfig(
+                    enabled=bool(
+                        os.getenv("EMBY_PATH_MAPPING_FROM", "")
+                        or os.getenv("EMBY_PATH_MAPPING_TO", "")
+                    ),
+                    from_path=os.getenv("EMBY_PATH_MAPPING_FROM", ""),
+                    to_path=os.getenv("EMBY_PATH_MAPPING_TO", ""),
+                ),
             ),
             # Notification configuration
             notification=NotificationConfig(
