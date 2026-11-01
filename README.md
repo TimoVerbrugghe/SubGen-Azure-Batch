@@ -97,7 +97,7 @@ I recommend not enabling the Bazarr provider with other webhooks in SubGen-Azure
 
 **Note:** SubGen-Azure-Batch can also notify Bazarr when subtitles are generated via the Web UI or media server webhooks. Configure `BAZARR_URL` and `BAZARR_API_KEY` to enable this feature.
 
-Web UI batches notify Bazarr after all jobs finish, with one scan attempt per unique series or movie. Failed scans are logged as warnings and excluded from the successful notification count; they do not change completed transcription jobs to failed. A full scan is only requested when no targeted scans can be attempted, not as a retry for a failed targeted scan.
+Web UI batches notify Bazarr after all jobs finish, with one scan attempt per unique series or movie. The batch completion notification is sent before waiting for Bazarr, so a slow scan cannot delay it. HTTP rejections and uncertain transport outcomes are logged separately; after a timeout, Bazarr may still be scanning. Unconfirmed scans are excluded from the successful notification count and never change completed transcription jobs to failed. A full scan is only requested when no targeted scans can be attempted, not as a retry for a failed or unconfirmed targeted scan. Scan requests have a 300-second total timeout and 30-second connection timeout.
 
 ## Plex
 

@@ -5,14 +5,29 @@ This module handles integration with Bazarr for triggering scans
 and notifying about new subtitles.
 """
 
+import asyncio
 import logging
-from typing import Optional
+import time
+from enum import Enum
+from typing import Dict, Optional, Union
 
 import aiohttp
 
 from app.config import get_settings
 
 logger = logging.getLogger(__name__)
+
+BAZARR_SCAN_TIMEOUT_SECONDS = 300
+BAZARR_SCAN_CONNECT_TIMEOUT_SECONDS = 30
+
+
+class BazarrScanOutcome(str, Enum):
+    """Whether Bazarr confirmed a scan request or its outcome is uncertain."""
+
+    CONFIRMED = "confirmed"
+    REJECTED = "rejected"
+    UNCONFIRMED = "unconfirmed"
+    NOT_ATTEMPTED = "not_attempted"
 
 
 class BazarrClient:
@@ -93,40 +108,33 @@ class BazarrClient:
         Returns:
             True if successful.
         """
+        return (
+            await self.trigger_series_scan_outcome(series_id)
+        ) is BazarrScanOutcome.CONFIRMED
+
+    async def trigger_series_scan_outcome(
+        self, series_id: Optional[int] = None
+    ) -> BazarrScanOutcome:
+        """Trigger a series scan and preserve whether the remote outcome is uncertain."""
         if not self.is_configured:
             logger.warning("Bazarr not configured, skipping series scan")
-            return False
-        
-        try:
-            session = await self._get_session()
-            
-            if series_id:
-                # PATCH /api/series with action=scan-disk and seriesid
-                url = f"{self.url}/api/series"
-                params = {"seriesid": series_id, "action": "scan-disk"}
-                async with session.patch(url, headers=self.headers, params=params) as response:
-                    if response.status == 204 or response.status == 200:
-                        logger.debug(f"Bazarr: Disk scan triggered for series {series_id}")
-                        return True
-                    else:
-                        text = await response.text()
-                        logger.warning(f"Bazarr: Series scan failed (HTTP {response.status}): {text}")
-                        return False
-            else:
-                # Trigger full series subtitle indexing task
-                url = f"{self.url}/api/system/tasks"
-                params = {"taskid": "update_series"}
-                async with session.post(url, headers=self.headers, params=params) as response:
-                    if response.status == 204 or response.status == 200:
-                        logger.info("Bazarr: Full series update task triggered")
-                        return True
-                    else:
-                        logger.warning(f"Bazarr: Series update task failed (HTTP {response.status})")
-                        return False
-                    
-        except Exception as e:
-            logger.error(f"Error triggering Bazarr series scan: {e}")
-            return False
+            return BazarrScanOutcome.NOT_ATTEMPTED
+
+        if series_id:
+            return await self._trigger_scan(
+                operation="series",
+                target=f"series {series_id}",
+                method="patch",
+                url=f"{self.url}/api/series",
+                params={"seriesid": series_id, "action": "scan-disk"},
+            )
+        return await self._trigger_scan(
+            operation="series",
+            target="full series update",
+            method="post",
+            url=f"{self.url}/api/system/tasks",
+            params={"taskid": "update_series"},
+        )
     
     async def trigger_movie_scan(self, movie_id: Optional[int] = None) -> bool:
         """
@@ -141,41 +149,126 @@ class BazarrClient:
         Returns:
             True if successful.
         """
+        return (
+            await self.trigger_movie_scan_outcome(movie_id)
+        ) is BazarrScanOutcome.CONFIRMED
+
+    async def trigger_movie_scan_outcome(
+        self, movie_id: Optional[int] = None
+    ) -> BazarrScanOutcome:
+        """Trigger a movie scan and preserve whether the remote outcome is uncertain."""
         if not self.is_configured:
             logger.warning("Bazarr not configured, skipping movie scan")
-            return False
-        
+            return BazarrScanOutcome.NOT_ATTEMPTED
+
+        if movie_id:
+            return await self._trigger_scan(
+                operation="movie",
+                target=f"movie {movie_id}",
+                method="patch",
+                url=f"{self.url}/api/movies",
+                params={"radarrid": movie_id, "action": "scan-disk"},
+            )
+        return await self._trigger_scan(
+            operation="movie",
+            target="full movie update",
+            method="post",
+            url=f"{self.url}/api/system/tasks",
+            params={"taskid": "update_movies"},
+        )
+
+    async def _trigger_scan(
+        self,
+        operation: str,
+        target: str,
+        method: str,
+        url: str,
+        params: Dict[str, Union[int, str]],
+    ) -> BazarrScanOutcome:
+        """Send a bounded scan request and classify its observable outcome."""
+        started_at = time.monotonic()
         try:
             session = await self._get_session()
-            
-            if movie_id:
-                # PATCH /api/movies with action=scan-disk and radarrid
-                url = f"{self.url}/api/movies"
-                params = {"radarrid": movie_id, "action": "scan-disk"}
-                async with session.patch(url, headers=self.headers, params=params) as response:
-                    if response.status == 204 or response.status == 200:
-                        logger.debug(f"Bazarr: Disk scan triggered for movie {movie_id}")
-                        return True
-                    else:
-                        text = await response.text()
-                        logger.warning(f"Bazarr: Movie scan failed (HTTP {response.status}): {text}")
-                        return False
+            timeout = aiohttp.ClientTimeout(
+                total=BAZARR_SCAN_TIMEOUT_SECONDS,
+                sock_connect=BAZARR_SCAN_CONNECT_TIMEOUT_SECONDS,
+            )
+            if method == "patch":
+                request = session.patch(
+                    url, headers=self.headers, params=params, timeout=timeout
+                )
             else:
-                # Trigger full movie subtitle indexing task
-                url = f"{self.url}/api/system/tasks"
-                params = {"taskid": "update_movies"}
-                async with session.post(url, headers=self.headers, params=params) as response:
-                    if response.status == 204 or response.status == 200:
-                        logger.info("Bazarr: Full movie update task triggered")
-                        return True
-                    else:
-                        logger.warning(f"Bazarr: Movie update task failed (HTTP {response.status})")
-                        return False
-                    
-        except Exception as e:
-            logger.error(f"Error triggering Bazarr movie scan: {e}")
-            return False
-    
+                request = session.post(
+                    url, headers=self.headers, params=params, timeout=timeout
+                )
+
+            async with request as response:
+                elapsed = time.monotonic() - started_at
+                if response.status in (200, 204):
+                    logger.debug(
+                        "Bazarr %s scan confirmed for %s after %.1fs",
+                        operation,
+                        target,
+                        elapsed,
+                    )
+                    return BazarrScanOutcome.CONFIRMED
+
+                detail = (await response.text())[:500]
+                logger.warning(
+                    "Bazarr %s scan rejected for %s (HTTP %s, %.1fs): %s",
+                    operation,
+                    target,
+                    response.status,
+                    elapsed,
+                    detail,
+                )
+                return BazarrScanOutcome.REJECTED
+        except asyncio.TimeoutError as error:
+            elapsed = time.monotonic() - started_at
+            logger.exception(
+                "Bazarr %s scan outcome unconfirmed for %s after %.1fs "
+                "(timeout limit %ds, connection limit %ds; exception=%s); "
+                "Bazarr may still be scanning",
+                operation,
+                target,
+                elapsed,
+                BAZARR_SCAN_TIMEOUT_SECONDS,
+                BAZARR_SCAN_CONNECT_TIMEOUT_SECONDS,
+                type(error).__name__,
+            )
+            return BazarrScanOutcome.UNCONFIRMED
+        except Exception as error:
+            elapsed = time.monotonic() - started_at
+            logger.exception(
+                "Bazarr %s scan outcome unconfirmed for %s after %.1fs "
+                "(timeout limit %ds, connection limit %ds; exception=%s)",
+                operation,
+                target,
+                elapsed,
+                BAZARR_SCAN_TIMEOUT_SECONDS,
+                BAZARR_SCAN_CONNECT_TIMEOUT_SECONDS,
+                type(error).__name__,
+            )
+            return BazarrScanOutcome.UNCONFIRMED
+
+    async def trigger_disk_scan_outcome(self) -> BazarrScanOutcome:
+        """Trigger full series and movie indexing and combine their outcomes."""
+        if not self.is_configured:
+            logger.warning("Bazarr not configured, skipping disk scan")
+            return BazarrScanOutcome.NOT_ATTEMPTED
+
+        outcomes = (
+            await self.trigger_series_scan_outcome(),
+            await self.trigger_movie_scan_outcome(),
+        )
+        if BazarrScanOutcome.CONFIRMED in outcomes:
+            return BazarrScanOutcome.CONFIRMED
+        if BazarrScanOutcome.UNCONFIRMED in outcomes:
+            return BazarrScanOutcome.UNCONFIRMED
+        if all(outcome is BazarrScanOutcome.NOT_ATTEMPTED for outcome in outcomes):
+            return BazarrScanOutcome.NOT_ATTEMPTED
+        return BazarrScanOutcome.REJECTED
+
     async def trigger_disk_scan(self) -> bool:
         """
         Trigger a full disk scan in Bazarr.
@@ -185,17 +278,9 @@ class BazarrClient:
         Returns:
             True if successful.
         """
-        if not self.is_configured:
-            logger.warning("Bazarr not configured, skipping disk scan")
-            return False
-        
-        success = True
-        
-        # Trigger both series and movie scans
-        series_result = await self.trigger_series_scan()
-        movie_result = await self.trigger_movie_scan()
-        
-        return series_result or movie_result
+        return (
+            await self.trigger_disk_scan_outcome()
+        ) is BazarrScanOutcome.CONFIRMED
     
     async def get_series(self, series_id: int) -> Optional[dict]:
         """
