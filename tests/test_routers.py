@@ -8,7 +8,7 @@ Comprehensive tests for UI, ASR, Batch, and Webhook routers.
 import os
 import tempfile
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 
@@ -177,6 +177,113 @@ class TestBatchRouter:
         """Test deleting non-existent session returns 404."""
         response = client.delete("/api/batch/session/nonexistent")
         assert response.status_code == 404
+
+
+class TestBatchNotifications:
+    """Test notification reporting through batch session processing."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("media_type", ["series", "movie", "unmatched"])
+    @pytest.mark.parametrize("scan_results", [(True, True), (False, False), (True, False)])
+    async def test_should_report_scan_result_without_duplicate_attempts(
+        self, mock_settings, caplog, media_type: str, scan_results: tuple[bool, bool]
+    ) -> None:
+        """Report actual scan results and attempt each target only once."""
+        from app.routers import batch
+        from app.transcription_service import (
+            JobSource,
+            JobStatus,
+            TranscriptionJob,
+            TranscriptionSession,
+        )
+
+        session = TranscriptionSession(id="notification-test")
+        for index in range(2):
+            job = TranscriptionJob(
+                id=str(index),
+                file_path=f"/media/video-{index}.mp4",
+                language="en",
+                source=JobSource.UI,
+                status=JobStatus.COMPLETED,
+            )
+            session.jobs[job.id] = job
+
+        mixed = scan_results[0] != scan_results[1]
+        scan_success = scan_results[0]
+        bazarr = MagicMock()
+        bazarr.search_series_by_path = AsyncMock(
+            side_effect=[
+                {"sonarrSeriesId": 299 + (index if mixed else 0)}
+                if media_type == "series"
+                else None
+                for index in range(2)
+            ]
+        )
+        bazarr.search_movie_by_path = AsyncMock(
+            side_effect=[
+                {"radarrId": 42 + (index if mixed else 0)}
+                if media_type == "movie"
+                else None
+                for index in range(2)
+            ]
+        )
+        bazarr.trigger_series_scan = AsyncMock(side_effect=scan_results)
+        bazarr.trigger_movie_scan = AsyncMock(side_effect=scan_results)
+        bazarr.trigger_disk_scan = AsyncMock(return_value=scan_success)
+        bazarr.close = AsyncMock()
+
+        with (
+            patch.object(batch, "get_settings", return_value=mock_settings),
+            patch.object(batch, "BazarrClient", return_value=bazarr),
+            patch.object(batch.TranscriptionService, "get_session", return_value=session),
+            patch.object(
+                batch.TranscriptionService,
+                "transcribe_file",
+                new=AsyncMock(return_value=(None, None)),
+            ),
+            patch.object(
+                batch, "_refresh_media_servers_for_completed_jobs", new=AsyncMock()
+            ),
+            patch.dict(batch._batch_metadata, {}, clear=True),
+            caplog.at_level("INFO", logger="app.routers.batch"),
+        ):
+            await batch.process_batch_session(session.id)
+
+        if media_type == "unmatched":
+            bazarr.trigger_disk_scan.assert_awaited_once_with()
+            bazarr.trigger_series_scan.assert_not_awaited()
+            bazarr.trigger_movie_scan.assert_not_awaited()
+            assert ("Bazarr: Full disk scan failed" in caplog.text) == (not scan_success)
+        else:
+            scan = (
+                bazarr.trigger_series_scan
+                if media_type == "series"
+                else bazarr.trigger_movie_scan
+            )
+            target_id = 299 if media_type == "series" else 42
+            if mixed:
+                assert scan.await_args_list == [
+                    call(target_id),
+                    call(target_id + 1),
+                ]
+            else:
+                scan.assert_awaited_once_with(target_id)
+            bazarr.trigger_disk_scan.assert_not_awaited()
+            assert ("Bazarr: Triggered disk scan" in caplog.text) == scan_success
+            assert ("Notified Bazarr:" in caplog.text) == scan_success
+            assert ("Bazarr: Disk scan failed" in caplog.text) == (
+                mixed or not scan_success
+            )
+            if scan_success:
+                expected_count = (
+                    "1 series, 0 movies"
+                    if media_type == "series"
+                    else "0 series, 1 movies"
+                )
+                assert f"Notified Bazarr: {expected_count}" in caplog.text
+
+        bazarr.close.assert_awaited_once_with()
+        assert all(job.status == JobStatus.COMPLETED for job in session.jobs.values())
 
 
 class TestWebhookRouter:

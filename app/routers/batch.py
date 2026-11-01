@@ -197,6 +197,8 @@ async def _notify_bazarr_for_completed_jobs(session_id: str, session: Transcript
             return
         
         # Track unique series/movie IDs to avoid duplicate scans
+        attempted_series: set = set()
+        attempted_movies: set = set()
         scanned_series: set = set()
         scanned_movies: set = set()
         
@@ -205,20 +207,26 @@ async def _notify_bazarr_for_completed_jobs(session_id: str, session: Transcript
             series = await bazarr.search_series_by_path(path)
             if series:
                 series_id = series.get('sonarrSeriesId')
-                if series_id and series_id not in scanned_series:
-                    await bazarr.trigger_series_scan(series_id)
-                    scanned_series.add(series_id)
-                    logger.info(f"[{session_id}] Bazarr: Triggered disk scan for series {series_id}")
+                if series_id and series_id not in attempted_series:
+                    attempted_series.add(series_id)
+                    if await bazarr.trigger_series_scan(series_id):
+                        scanned_series.add(series_id)
+                        logger.info(f"[{session_id}] Bazarr: Triggered disk scan for series {series_id}")
+                    else:
+                        logger.warning(f"[{session_id}] Bazarr: Disk scan failed for series {series_id}")
                 continue
             
             # Try to find matching movie
             movie = await bazarr.search_movie_by_path(path)
             if movie:
                 movie_id = movie.get('radarrId')
-                if movie_id and movie_id not in scanned_movies:
-                    await bazarr.trigger_movie_scan(movie_id)
-                    scanned_movies.add(movie_id)
-                    logger.info(f"[{session_id}] Bazarr: Triggered disk scan for movie {movie_id}")
+                if movie_id and movie_id not in attempted_movies:
+                    attempted_movies.add(movie_id)
+                    if await bazarr.trigger_movie_scan(movie_id):
+                        scanned_movies.add(movie_id)
+                        logger.info(f"[{session_id}] Bazarr: Triggered disk scan for movie {movie_id}")
+                    else:
+                        logger.warning(f"[{session_id}] Bazarr: Disk scan failed for movie {movie_id}")
         
         total_scans = len(scanned_series) + len(scanned_movies)
         if total_scans > 0:
@@ -226,11 +234,12 @@ async def _notify_bazarr_for_completed_jobs(session_id: str, session: Transcript
                 f"[{session_id}] Notified Bazarr: {len(scanned_series)} series, "
                 f"{len(scanned_movies)} movies"
             )
-        else:
+        elif not attempted_series and not attempted_movies:
             # Fallback to full scan if no specific items found
             # (e.g., files not in Bazarr's library yet)
             logger.info(f"[{session_id}] No matching Bazarr items found, triggering full scan")
-            await bazarr.trigger_disk_scan()
+            if not await bazarr.trigger_disk_scan():
+                logger.warning(f"[{session_id}] Bazarr: Full disk scan failed")
             
     except Exception as e:
         logger.warning(f"[{session_id}] Failed to notify Bazarr: {e}")

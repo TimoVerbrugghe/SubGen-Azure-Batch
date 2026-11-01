@@ -95,6 +95,8 @@ I recommend not enabling the Bazarr provider with other webhooks in SubGen-Azure
 
 **Note:** SubGen-Azure-Batch can also notify Bazarr when subtitles are generated via the Web UI or media server webhooks. Configure `BAZARR_URL` and `BAZARR_API_KEY` to enable this feature.
 
+Web UI batches notify Bazarr after all jobs finish, with one scan attempt per unique series or movie. Failed scans are logged as warnings and excluded from the successful notification count; they do not change completed transcription jobs to failed. A full scan is only requested when no targeted scans can be attempted, not as a retry for a failed targeted scan.
+
 ## Plex
 
 Create a webhook in Plex that will call back to your SubGen-Azure-Batch address, e.g., http://192.168.1.111:9000/plex. See: https://support.plex.tv/articles/115002267687-webhooks/
