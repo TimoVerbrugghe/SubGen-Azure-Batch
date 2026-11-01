@@ -266,6 +266,8 @@ Agent paths must be absolute paths visible inside the service container and loca
 
 The `languages` list accepts ISO 639 codes (for example `en`, `de`) or Azure locales (for example `en-US`, `de-DE`). Each file is queued once per requested language, with a maximum of four languages and 1000 file-language jobs per request. This is explicit-language transcription, not Azure language identification. `apply_skip_rules` defaults to `true`; `notify_bazarr` defaults to `false` for agent requests. These options are attached to the individual batch and do not change Web UI or webhook defaults.
 
+Agent configuration is environment-only; the API key and MCP host allowlist are not written to a database or UI settings. Batch sessions use the application's existing in-memory tracking. After a process or container restart, tracked batch IDs and statuses are lost, and unfinished batches are not resumed. A restart also does not guarantee cleanup or cancellation of Azure resources already created for those jobs.
+
 ### REST examples
 
 ```bash
