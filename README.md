@@ -60,6 +60,7 @@ Key benefits of SubGen-Azure-Batch:
 - Azure Speech Services integration with blob storage
 - Pushover notifications for transcription failures
 - Bazarr integration - automatically notifies Bazarr when subtitles are generated
+- Authenticated REST and MCP interfaces for agent-submitted transcription batches
 
 ## How do I set it up?
 
@@ -180,6 +181,9 @@ The following environment variables are available in Docker. They will default t
 | **Media Settings** |   |   |
 | MEDIA_FOLDERS | '/tv,/movies' | **(New)** Comma-separated list of paths to show in the Web UI file browser |
 | SUBTITLE_LANGUAGE | '' | Default subtitle language code (leave empty for auto-detect) |
+| **Agent API** |   |   |
+| AGENT_API_KEY | '' | **(New)** Bearer key for agent REST/MCP access. Empty disables these interfaces; configure a unique key and keep the service on a trusted network. |
+| AGENT_MCP_ALLOWED_HOSTS | 'localhost:*,127.0.0.1:*,[::1]:*' | **(New)** Comma-separated MCP Host header allowlist. Add exact host:port entries for trusted remote clients; DNS rebinding protection remains enabled. |
 | **Processing Settings** |   |   |
 | CONCURRENT_TRANSCRIPTIONS | 10 | Maximum number of files processed end-to-end concurrently — covers audio extraction, blob upload, and Azure transcription. Raise to increase throughput; lower to reduce CPU pressure from simultaneous FFmpeg processes. Azure's per-subscription quota is enforced by an internal guard. Bazarr requests are always served before batch jobs in the queue. |
 | TRANSCODE_DIR | '/transcode' | Directory for temp audio files. Mount a volume here to reduce memory usage during batch processing |
@@ -254,6 +258,52 @@ Azure Speech Services imposes a per-subscription limit on simultaneous batch tra
 
 `MAX_CONCURRENT_UPLOADS` (default 2) limits simultaneous blob uploads independently to avoid Azure Storage write-timeout errors when many jobs reach the upload phase at the same time.
 
+## Agent API and MCP Server
+
+Agents can submit media files or folders for batch transcription through the authenticated REST API or built-in Model Context Protocol (MCP) server. Set a unique `AGENT_API_KEY` of at least 32 non-whitespace characters to enable either interface. If the configured key is missing or too short, requests fail closed with HTTP 503; once enabled, a missing or incorrect `X-API-Key` header receives HTTP 401.
+
+Agent paths must be absolute paths visible inside the service container and located under a configured `MEDIA_FOLDERS` root. The service resolves symlinks before access, rejects path traversal and paths outside those roots, and only accepts supported media files. For example, mount `/mnt/tv` as `/tv` and request `/tv/Series/Season 1`; do not pass a host path that the container cannot see.
+
+The `languages` list accepts ISO 639 codes (for example `en`, `de`) or Azure locales (for example `en-US`, `de-DE`). Each file is queued once per requested language, with a maximum of four languages and 1000 file-language jobs per request. This is explicit-language transcription, not Azure language identification. `apply_skip_rules` defaults to `true`; `notify_bazarr` defaults to `false` for agent requests. These options are attached to the individual batch and do not change Web UI or webhook defaults.
+
+### REST examples
+
+```bash
+curl -X POST http://localhost:9000/api/agent/batches \
+  -H "X-API-Key: $AGENT_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "folders": ["/tv/Example Series"],
+    "files": ["/movies/Example Movie.mkv"],
+    "languages": ["en-US", "fr"],
+    "apply_skip_rules": true,
+    "notify_bazarr": false
+  }'
+```
+
+The response contains a `session_id`. List active agent batches with `GET /api/agent/batches`, retrieve aggregate and per-file stage details with `GET /api/agent/batches/{session_id}`, and cancel with `POST /api/agent/batches/{session_id}/cancel`. Per-file stages include `queued`, `extracting`, `uploading`, `transcribing`, `completed`, `failed`, and `cancelled`. Submission and cancellation require Azure configuration; list/status requests do not start Azure work.
+
+### MCP client setup
+
+The server uses the MCP Streamable HTTP transport at `http://<host>:9000/mcp`. Configure your MCP client to send `X-API-Key` with the same `AGENT_API_KEY` value. MCP Host validation allows localhost by default; add the exact host and port used by remote clients to `AGENT_MCP_ALLOWED_HOSTS` (for example `subgen.local:9000`) without disabling DNS rebinding protection. For clients using a JSON server configuration, the shape is:
+
+```json
+{
+  "mcpServers": {
+    "subgen": {
+      "url": "http://localhost:9000/mcp",
+      "headers": {
+        "X-API-Key": "<your-AGENT_API_KEY>"
+      }
+    }
+  }
+}
+```
+
+The MCP tools are `submit_transcription_batch`, `list_active_batches`, `get_batch_status`, and `cancel_batch`. The submit tool accepts the same file/folder, language, skip-rule, and Bazarr options as REST.
+
+**Network security:** Treat the API key as a bearer secret. Keep this service on localhost or a trusted private network, restrict access with firewall rules, and use a TLS-terminating reverse proxy if clients connect across an untrusted network. Do not expose the service or MCP endpoint directly to the public internet.
+
 ## API Endpoints
 
 | Endpoint | Description |
@@ -270,6 +320,11 @@ Azure Speech Services imposes a per-subscription limit on simultaneous batch tra
 | `POST /tautulli` | Tautulli webhook |
 | `POST /api/batch/submit` | Submit batch transcription via API |
 | `GET /api/batch/sessions/{id}` | Get session status |
+| `POST /api/agent/batches` | Submit a secured agent batch (requires `X-API-Key`) |
+| `GET /api/agent/batches` | List active secured agent batches |
+| `GET /api/agent/batches/{id}` | Get secured batch counts and per-file stages |
+| `POST /api/agent/batches/{id}/cancel` | Cancel a secured agent batch |
+| `POST /mcp` | MCP Streamable HTTP server (requires `X-API-Key`) |
 | `GET /docs` | OpenAPI/Swagger documentation |
 
 ## Supported Languages

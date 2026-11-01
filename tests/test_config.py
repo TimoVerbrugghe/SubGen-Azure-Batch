@@ -295,6 +295,26 @@ class TestFormatDuration:
 
 class TestSettingsSingleton:
     """Test Settings singleton behavior."""
+
+    def test_agent_access_settings_are_loaded_from_environment(self):
+        """Test the agent key and MCP host allowlist configuration."""
+        from app.config import Settings
+
+        with patch.dict(
+            os.environ,
+            {
+                "AGENT_API_KEY": "agent-test-key",
+                "AGENT_MCP_ALLOWED_HOSTS": "localhost:9000,subgen.local:9000",
+            },
+            clear=True,
+        ):
+            settings = Settings.from_env()
+
+        assert settings.agent_api_key == "agent-test-key"
+        assert settings.agent_mcp_allowed_hosts == [
+            "localhost:9000",
+            "subgen.local:9000",
+        ]
     
     def test_get_settings_returns_same_instance(self):
         """Test that get_settings returns a cached instance."""

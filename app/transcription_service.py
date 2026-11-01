@@ -65,18 +65,27 @@ class PrioritySemaphore:
         fut: asyncio.Future = loop.create_future()
         self._seq += 1
         self._queue.put_nowait((priority, self._seq, fut))
-        await fut
+        try:
+            await fut
+        except asyncio.CancelledError:
+            if fut.done() and not fut.cancelled():
+                self.release()
+            else:
+                fut.cancel()
+            raise
 
     def release(self) -> None:
         """Release a slot and unblock the highest-priority waiter (if any)."""
-        try:
-            _, _, fut = self._queue.get_nowait()
-            # Hand the slot directly to the waiter; do not increment _value.
+        while True:
+            try:
+                _, _, fut = self._queue.get_nowait()
+            except asyncio.QueueEmpty:
+                self._value += 1
+                return
+            # Hand the slot directly to the first live waiter.
             if not fut.done():
                 fut.set_result(None)
-        except asyncio.QueueEmpty:
-            # No waiters — return the slot to the pool.
-            self._value += 1
+                return
 
 
 class JobStatus(str, Enum):
@@ -882,11 +891,7 @@ class TranscriptionService:
         errors = []
 
         transcriber = None
-
         try:
-            # Use default constructor - reads settings automatically
-            transcriber = AzureBatchTranscriber()
-
             for job in session.jobs.values():
                 # Only cancel jobs that aren't already completed or failed
                 if job.status in (
@@ -899,6 +904,9 @@ class TranscriptionService:
                     job.completed_at = datetime.now()
                     cancelled_count += 1
                     logger.info(f"[Session {session_id}] [{job.id}] Cancelled job")
+
+                    if (job.blob_name or job.azure_job_id) and transcriber is None:
+                        transcriber = AzureBatchTranscriber()
 
                     # Try to cleanup Azure blob if uploaded
                     if job.blob_name:
@@ -928,7 +936,6 @@ class TranscriptionService:
                             logger.warning(
                                 f"[Session {session_id}] [{job.id}] Failed to delete transcription: {e}"
                             )
-
         finally:
             if transcriber:
                 await transcriber.close()

@@ -369,7 +369,7 @@ async def process_batch_job(session_id: str, job_id: str):
         result, updated_job = await TranscriptionService.transcribe_file(
             file_path=job.file_path,
             language=job.language,
-            source=JobSource.UI,
+            source=job.source,
             session_id=session_id,
             job_id=job_id,  # Use existing job
             save_srt=True,
