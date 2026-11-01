@@ -524,6 +524,10 @@ class TestBatchCompletionNotifications:
             completed_jobs=2,
             failed_jobs=0,
             skipped_jobs=1,
+            batch_id="notification-test",
+            file_paths=["/media/0.mkv", "/media/1.mkv"],
+            languages=["en", "en"],
+            failed_files=[],
         )
         assert metadata["completion_notification_attempted"] is True
 
@@ -548,6 +552,13 @@ class TestBatchCompletionNotifications:
             completed_jobs=expected_completed,
             failed_jobs=expected_failed,
             skipped_jobs=0,
+            batch_id="notification-test",
+            file_paths=["/media/0.mkv", "/media/1.mkv"],
+            languages=["en", "en"],
+            failed_files=[
+                f"/media/{index}.mkv"
+                for index, status in enumerate(statuses) if status == "failed"
+            ],
         )
 
     @pytest.mark.asyncio

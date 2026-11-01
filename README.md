@@ -237,6 +237,13 @@ The following environment variables are available in Docker. They will default t
 
 Batch summaries include total, completed, failed, and skipped file counts. Both Pushover credentials are required. Successful batch summaries are opt-in; set `NOTIFY_ON_SUCCESS=true` to enable them. Failure summaries follow `NOTIFY_ON_FAILURE`, which also controls the existing per-file failure alerts.
 
+Summaries also identify the batch ID, requested languages, and unique media files.
+Episodes are grouped by show and season folder when recognizable; movie folders
+or filenames provide a fallback. Up to six titles and two failed filenames are
+shown, with remaining-title counts and a 1024-character message limit. File counts
+are deduplicated across languages, while the completion counters count transcription
+jobs. No metadata service, database, or additional configuration is required.
+
 ## Queue Management and Concurrency
 
 SubGen-Azure-Batch uses a priority-aware concurrency system to ensure Bazarr subtitle requests are never blocked behind large batch jobs.
