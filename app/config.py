@@ -295,6 +295,10 @@ class Settings:
 
     # Server settings
     debug: bool = False
+    agent_api_key: str = ""
+    agent_mcp_allowed_hosts: list[str] = field(
+        default_factory=lambda: ["localhost:*", "127.0.0.1:*", "[::1]:*"]
+    )
 
     # UI settings
     default_theme: str = "dark"  # 'dark' or 'light'
@@ -341,6 +345,13 @@ class Settings:
         return cls(
             # Server settings
             debug=get_bool(os.getenv("DEBUG", "false")),
+            agent_api_key=os.getenv("AGENT_API_KEY", ""),
+            agent_mcp_allowed_hosts=get_list(
+                os.getenv(
+                    "AGENT_MCP_ALLOWED_HOSTS",
+                    "localhost:*,127.0.0.1:*,[::1]:*",
+                )
+            ),
             # UI settings
             default_theme=os.getenv("DEFAULT_THEME", "dark"),
             # Media settings

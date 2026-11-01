@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Authenticated REST and MCP interfaces for secure agent-submitted transcription batches
+- Per-batch languages, skip-rule and Bazarr notification options with path validation, detailed progress, and cancellation
+
 ## [1.0.1] - 2025-05-25
 
 ### Added
