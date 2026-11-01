@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- MCP is hosted at `/mcp` in Docker and Kubernetes, with updated deployment examples. An empty `AGENT_MCP_ALLOWED_HOSTS` now accepts any host/Origin while retaining mandatory API-key authentication; a configured allowlist enables DNS-rebinding protection.
+
+### Added
+
+- Batch notifications identify the batch, languages, and shows/seasons or movies, with bounded media and failed-file summaries.
+
+- Authenticated REST and MCP interfaces for secure agent-submitted transcription batches
+- Per-batch languages, skip-rule and Bazarr notification options with path validation, detailed progress, and cancellation
+- Pushover batch completion summaries for successes and batches with errors, including completed, failed, and skipped file counts. Success summaries are opt-in with `NOTIFY_ON_SUCCESS`.
+
 ## [1.0.1] - 2025-05-25
 
 ### Added

@@ -103,6 +103,26 @@ class EmbyConfig:
 
 
 @dataclass
+class NotificationConfig:
+    """Pushover notification configuration."""
+
+    pushover_user_key: str = ""
+    pushover_api_token: str = ""
+    notify_on_failure: bool = True
+    notify_on_success: bool = False
+
+    @property
+    def pushover_configured(self) -> bool:
+        """Check if Pushover credentials are configured."""
+        return bool(self.pushover_user_key and self.pushover_api_token)
+
+    @property
+    def is_configured(self) -> bool:
+        """Check if any notification provider is configured."""
+        return self.pushover_configured
+
+
+@dataclass
 class PathMappingConfig:
     """Path mapping configuration for Docker volume differences."""
 
@@ -295,6 +315,8 @@ class Settings:
 
     # Server settings
     debug: bool = False
+    agent_api_key: str = ""
+    agent_mcp_allowed_hosts: list[str] = field(default_factory=list)
 
     # UI settings
     default_theme: str = "dark"  # 'dark' or 'light'
@@ -334,6 +356,7 @@ class Settings:
     plex: PlexConfig = field(default_factory=PlexConfig)
     jellyfin: JellyfinConfig = field(default_factory=JellyfinConfig)
     emby: EmbyConfig = field(default_factory=EmbyConfig)
+    notification: NotificationConfig = field(default_factory=NotificationConfig)
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -341,6 +364,10 @@ class Settings:
         return cls(
             # Server settings
             debug=get_bool(os.getenv("DEBUG", "false")),
+            agent_api_key=os.getenv("AGENT_API_KEY", ""),
+            agent_mcp_allowed_hosts=get_list(
+                os.getenv("AGENT_MCP_ALLOWED_HOSTS", "")
+            ),
             # UI settings
             default_theme=os.getenv("DEFAULT_THEME", "dark"),
             # Media settings
@@ -442,6 +469,13 @@ class Settings:
             emby=EmbyConfig(
                 token=os.getenv("EMBY_TOKEN", ""),
                 server=os.getenv("EMBY_SERVER", ""),
+            ),
+            # Notification configuration
+            notification=NotificationConfig(
+                pushover_user_key=os.getenv("PUSHOVER_USER_KEY", ""),
+                pushover_api_token=os.getenv("PUSHOVER_API_TOKEN", ""),
+                notify_on_failure=get_bool(os.getenv("NOTIFY_ON_FAILURE", "true")),
+                notify_on_success=get_bool(os.getenv("NOTIFY_ON_SUCCESS", "false")),
             ),
         )
 

@@ -98,6 +98,8 @@ def azure_storage_container():
 @pytest.fixture
 def mock_settings():
     """Create mock settings for testing without real environment."""
+    from app.config import NotificationConfig
+
     mock_azure = MagicMock()
     mock_azure.speech_key = "test-key"
     mock_azure.speech_region = "swedencentral"
@@ -161,12 +163,7 @@ def mock_settings():
     mock_path_mapping.to_path = "/Volumes/TV"
     mock_path_mapping.apply = lambda path: path
     
-    mock_notification = MagicMock()
-    mock_notification.pushover_user_key = ""
-    mock_notification.pushover_api_token = ""
-    mock_notification.notify_on_failure = True
-    mock_notification.pushover_configured = False
-    mock_notification.is_configured = False
+    mock_notification = NotificationConfig()
     
     settings = MagicMock()
     settings.azure = mock_azure
@@ -187,6 +184,8 @@ def mock_settings():
     settings.host = "0.0.0.0"
     settings.port = 8090
     settings.debug = False
+    settings.agent_api_key = "subgen-agent-key-0123456789abcdef"
+    settings.agent_mcp_allowed_hosts = []
     
     return settings
 

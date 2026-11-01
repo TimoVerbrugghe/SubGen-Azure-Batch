@@ -217,6 +217,7 @@ async def extract_audio(
     
     logger.info(f"Extracting audio from {video_path} to {output_path}")
     
+    process = None
     try:
         process = await asyncio.create_subprocess_exec(
             *cmd,
@@ -233,6 +234,15 @@ async def extract_audio(
         logger.info(f"Audio extracted successfully: {output_path}")
         return output_path
         
+    except asyncio.CancelledError:
+        if process is not None and process.returncode is None:
+            process.kill()
+            await process.wait()
+        try:
+            Path(output_path).unlink()
+        except FileNotFoundError:
+            pass
+        raise
     except FileNotFoundError:
         raise RuntimeError("FFmpeg not found. Please install FFmpeg.")
 

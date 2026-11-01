@@ -32,7 +32,7 @@ Key benefits of SubGen-Azure-Batch:
 | **Standalone Mode** | Yes (launcher.py) | Docker only |
 | **Metadata Refresh** | After queue start | After transcription completion |
 | **Bazarr Notifications** | Not available | Notifies Bazarr when subtitles are generated via webhooks/UI |
-| **Pushover Notifications** | Not available | Notifies on transcription failures |
+| **Pushover Notifications** | Not available | Per-file failure alerts and batch completion summaries |
 
 **Removed Environment Variables** (not applicable to SubGen-Azure-Batch):
 
@@ -58,8 +58,9 @@ Key benefits of SubGen-Azure-Batch:
 
 - Web UI for browsing media and submitting batch transcription jobs
 - Azure Speech Services integration with blob storage
-- Pushover notifications for transcription failures
+- Pushover notifications for per-file failures and batch completion summaries
 - Bazarr integration - automatically notifies Bazarr when subtitles are generated
+- Authenticated REST and MCP interfaces for agent-submitted transcription batches
 
 ## How do I set it up?
 
@@ -69,6 +70,7 @@ You'll need:
 
 - **Azure Speech Services** - [Create a resource](https://portal.azure.com/#create/Microsoft.CognitiveServicesSpeechServices)
 - **Azure Storage Account** - [Create a storage account](https://portal.azure.com/#create/Microsoft.StorageAccount-ARM)
+- **Pushover (optional)** - Create a [Pushover account](https://pushover.net/) and [application](https://pushover.net/apps/build) for notifications. Configure the application API token and your user key with `PUSHOVER_API_TOKEN` and `PUSHOVER_USER_KEY`.
 
 ## Docker
 
@@ -180,6 +182,9 @@ The following environment variables are available in Docker. They will default t
 | **Media Settings** |   |   |
 | MEDIA_FOLDERS | '/tv,/movies' | **(New)** Comma-separated list of paths to show in the Web UI file browser |
 | SUBTITLE_LANGUAGE | '' | Default subtitle language code (leave empty for auto-detect) |
+| **Agent API** |   |   |
+| AGENT_API_KEY | '' | **(New)** Bearer key for agent REST/MCP access. Empty disables these interfaces; configure a unique key and keep the service on a trusted network. |
+| AGENT_MCP_ALLOWED_HOSTS | '' | **(New)** Optional comma-separated MCP Host header allowlist. Empty/unset accepts any host and Origin; a non-empty list enables DNS-rebinding protection. API-key authentication is always required. |
 | **Processing Settings** |   |   |
 | CONCURRENT_TRANSCRIPTIONS | 10 | Maximum number of files processed end-to-end concurrently — covers audio extraction, blob upload, and Azure transcription. Raise to increase throughput; lower to reduce CPU pressure from simultaneous FFmpeg processes. Azure's per-subscription quota is enforced by an internal guard. Bazarr requests are always served before batch jobs in the queue. |
 | TRANSCODE_DIR | '/transcode' | Directory for temp audio files. Mount a volume here to reduce memory usage during batch processing |
@@ -225,9 +230,19 @@ The following environment variables are available in Docker. They will default t
 | BAZARR_URL | '' | **(New)** Bazarr server URL for notifications (e.g., http://bazarr:6767) |
 | BAZARR_API_KEY | '' | **(New)** Bazarr API key for notifications |
 | **Notifications** |   |   |
-| PUSHOVER_USER_KEY | '' | **(New)** Pushover user key for failure notifications |
-| PUSHOVER_API_TOKEN | '' | **(New)** Pushover application API token |
-| NOTIFY_ON_FAILURE | True | **(New)** Send notification when a transcription job fails |
+| PUSHOVER_USER_KEY | '' | **(New)** Pushover user/group key. Required with `PUSHOVER_API_TOKEN` to send notifications. |
+| PUSHOVER_API_TOKEN | '' | **(New)** Pushover application API token. Create an application in Pushover to obtain it. |
+| NOTIFY_ON_FAILURE | True | **(New)** Send per-file alerts and a batch summary when one or more files fail. |
+| NOTIFY_ON_SUCCESS | False | Send a batch summary when all processed files succeed. Disabled by default. |
+
+Batch summaries include total, completed, failed, and skipped file counts. Both Pushover credentials are required. Successful batch summaries are opt-in; set `NOTIFY_ON_SUCCESS=true` to enable them. Failure summaries follow `NOTIFY_ON_FAILURE`, which also controls the existing per-file failure alerts.
+
+Summaries also identify the batch ID, requested languages, and unique media files.
+Episodes are grouped by show and season folder when recognizable; movie folders
+or filenames provide a fallback. Up to six titles and two failed filenames are
+shown, with remaining-title counts and a 1024-character message limit. File counts
+are deduplicated across languages, while the completion counters count transcription
+jobs. No metadata service, database, or additional configuration is required.
 
 ## Queue Management and Concurrency
 
@@ -254,6 +269,113 @@ Azure Speech Services imposes a per-subscription limit on simultaneous batch tra
 
 `MAX_CONCURRENT_UPLOADS` (default 2) limits simultaneous blob uploads independently to avoid Azure Storage write-timeout errors when many jobs reach the upload phase at the same time.
 
+## Agent API and MCP Server
+
+Agents can submit media files or folders for batch transcription through the authenticated REST API or built-in Model Context Protocol (MCP) server. Set a unique `AGENT_API_KEY` of at least 32 non-whitespace characters to enable either interface. If the configured key is missing or too short, requests fail closed with HTTP 503; once enabled, a missing or incorrect `X-API-Key` header receives HTTP 401.
+
+Agent paths must be absolute paths visible inside the service container and located under a configured `MEDIA_FOLDERS` root. The service resolves symlinks before access, rejects path traversal and paths outside those roots, and only accepts supported media files. For example, mount `/mnt/tv` as `/tv` and request `/tv/Series/Season 1`; do not pass a host path that the container cannot see.
+
+The `languages` list accepts ISO 639 codes (for example `en`, `de`) or Azure locales (for example `en-US`, `de-DE`). Each file is queued once per requested language, with a maximum of four languages and 1000 file-language jobs per request. This is explicit-language transcription, not Azure language identification. `apply_skip_rules` defaults to `true`; `notify_bazarr` defaults to `false` for agent requests. These options are attached to the individual batch and do not change Web UI or webhook defaults.
+
+Agent configuration is environment-only; the API key and MCP host allowlist are not written to a database or UI settings. Batch sessions use the application's existing in-memory tracking. After a process or container restart, tracked batch IDs and statuses are lost, and unfinished batches are not resumed. A restart also does not guarantee cleanup or cancellation of Azure resources already created for those jobs.
+
+### REST examples
+
+```bash
+curl -X POST http://localhost:9000/api/agent/batches \
+  -H "X-API-Key: $AGENT_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "folders": ["/tv/Example Series"],
+    "files": ["/movies/Example Movie.mkv"],
+    "languages": ["en-US", "fr"],
+    "apply_skip_rules": true,
+    "notify_bazarr": false
+  }'
+```
+
+The response contains a `session_id`. List active agent batches with `GET /api/agent/batches`, retrieve aggregate and per-file stage details with `GET /api/agent/batches/{session_id}`, and cancel with `POST /api/agent/batches/{session_id}/cancel`. Per-file stages include `queued`, `extracting`, `uploading`, `transcribing`, `completed`, `failed`, and `cancelled`. Submission and cancellation require Azure configuration; list/status requests do not start Azure work.
+
+### MCP client setup
+
+The MCP server is hosted **inside SubGen**, alongside the web UI on port 9000.
+No separate MCP process or local bridge is required in Docker or Kubernetes.
+It uses Streamable HTTP at `http://<host>:9000/mcp`, or
+`https://<host>/mcp` behind an HTTPS reverse proxy.
+Configure your client to send `X-API-Key` on every request.
+
+`AGENT_MCP_ALLOWED_HOSTS` is optional: empty or unset accepts any Host and Origin,
+but **does not bypass API-key authentication**. This disables the SDK's
+DNS-rebinding host/origin checks. For defense in depth, set a comma-separated
+allowlist such as `subgen.example.com,subgen.local:9000,localhost:*`.
+Use the externally requested hostname (include the port when present); corresponding
+HTTP/HTTPS origins are allowed automatically. This setting is not an IP firewall
+or a list of client machines.
+
+For clients using a JSON server configuration, the shape is:
+
+```json
+{
+  "mcpServers": {
+    "subgen": {
+      "url": "https://subgen.example.com/mcp",
+      "headers": {
+        "X-API-Key": "<your-AGENT_API_KEY>"
+      }
+    }
+  }
+}
+```
+
+The MCP tools are `submit_transcription_batch`, `list_active_batches`, `get_batch_status`, and `cancel_batch`. The submit tool accepts the same file/folder, language, skip-rule, and Bazarr options as REST.
+
+### Docker deployment
+
+The included [docker-compose.yml](docker-compose.yml) passes both agent variables
+and Pushover settings from `.env` into the container. Generate a unique API key
+locally (`openssl rand -hex 32`), place it in `.env` as `AGENT_API_KEY`, and never
+commit that file. Optionally set `AGENT_MCP_ALLOWED_HOSTS`; leave it blank to accept
+any hostname. Then run:
+
+```bash
+docker compose up -d --build
+```
+
+Connect on a trusted LAN at `http://<docker-host>:9000/mcp`, or configure an HTTPS
+reverse proxy for `https://subgen.example.com/mcp`. The same API-key requirement
+applies in either case.
+
+### Kubernetes deployment
+
+The [example manifest](examples/kubernetes.yaml) contains a single-replica
+Deployment, ClusterIP Service, and HTTPS Ingress for the hosted MCP server.
+Before applying it:
+
+1. Select your namespace and a published image tag/digest containing these features.
+2. Replace the media PVC names with your existing writable RWX media claims.
+3. Provision a `subgen-secrets` Secret in that namespace with `AZURE_SPEECH_KEY`,
+   `AZURE_STORAGE_CONNECTION_STRING`, and `AGENT_API_KEY`. Optionally add
+   `PUSHOVER_USER_KEY` and `PUSHOVER_API_TOKEN`. Use your secret manager; do not
+   commit live credentials. Set `AZURE_SPEECH_REGION` to your resource's region.
+4. Replace the Ingress hostname, ingress class, and TLS Secret name. Provision a
+   matching TLS certificate, and optionally set `AGENT_MCP_ALLOWED_HOSTS`.
+5. Apply: `kubectl apply -n <namespace> -f examples/kubernetes.yaml`.
+
+Ingress must route `/mcp` (including `/mcp/`) to port 9000 and preserve
+`X-API-Key`, `Mcp-Session-Id`, `MCP-Protocol-Version`, and streaming responses.
+Disable response buffering where your ingress requires it and allow long-lived
+streaming requests. These settings are ingress-controller-specific.
+Use one replica: batch and MCP session tracking is in memory; multiple replicas
+would require session affinity and do not share batch state.
+The example mounts `/transcode` as an `emptyDir` for temporary audio; no settings
+database or additional persistent application state is introduced.
+
+Only the agent REST API and `/mcp` are API-key protected. The existing web UI and
+legacy routes retain their behavior; keep the entire service on a trusted private
+network or add authentication at the ingress for those routes.
+
+**Network security:** Treat the API key as a bearer secret. Keep this service on localhost or a trusted private network, restrict access with firewall rules, and use a TLS-terminating reverse proxy if clients connect across an untrusted network. Do not expose the service or MCP endpoint directly to the public internet.
+
 ## API Endpoints
 
 | Endpoint | Description |
@@ -270,6 +392,11 @@ Azure Speech Services imposes a per-subscription limit on simultaneous batch tra
 | `POST /tautulli` | Tautulli webhook |
 | `POST /api/batch/submit` | Submit batch transcription via API |
 | `GET /api/batch/sessions/{id}` | Get session status |
+| `POST /api/agent/batches` | Submit a secured agent batch (requires `X-API-Key`) |
+| `GET /api/agent/batches` | List active secured agent batches |
+| `GET /api/agent/batches/{id}` | Get secured batch counts and per-file stages |
+| `POST /api/agent/batches/{id}/cancel` | Cancel a secured agent batch |
+| `POST /mcp` | MCP Streamable HTTP server (requires `X-API-Key`) |
 | `GET /docs` | OpenAPI/Swagger documentation |
 
 ## Supported Languages

@@ -371,6 +371,33 @@ class TestTranscriptionServiceJobs:
         assert job.error == "Test error message"
         assert job.completed_at is not None
 
+    @pytest.mark.asyncio
+    async def test_cancelled_job_status_cannot_be_overwritten(self):
+        """Keep cancellation terminal when a running worker reports progress."""
+        from app.transcription_service import (
+            JobSource,
+            JobStatus,
+            TranscriptionService,
+        )
+
+        session = await TranscriptionService.create_session(source=JobSource.UI)
+        job = await TranscriptionService.add_job(
+            session_id=session.id,
+            file_path="/test.mkv",
+            language="en",
+            source=JobSource.UI,
+        )
+        await TranscriptionService.update_job_status(
+            session.id, job.id, JobStatus.CANCELLED
+        )
+
+        await TranscriptionService.update_job_status(
+            session.id, job.id, JobStatus.COMPLETED, segments_count=10
+        )
+
+        assert job.status == JobStatus.CANCELLED
+        assert job.segments_count == 0
+
 
 class TestTranscriptionServiceActiveJobs:
     """Test active job tracking."""
@@ -519,6 +546,29 @@ class TestTranscriptionServiceConcurrency:
         await asyncio.gather(t_batch, t_bazarr)
 
         assert served[0] == "bazarr", f"Expected bazarr first, got: {served}"
+
+    @pytest.mark.asyncio
+    async def test_cancelled_waiter_does_not_consume_a_released_slot(self):
+        """Cancelled jobs leave the pipeline semaphore usable by later work."""
+        from app.transcription_service import PrioritySemaphore
+
+        sem = PrioritySemaphore(1)
+        await sem.acquire()
+
+        async def wait_for_slot():
+            await sem.acquire()
+
+        cancelled_waiter = asyncio.create_task(wait_for_slot())
+        await asyncio.sleep(0)
+        cancelled_waiter.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await cancelled_waiter
+
+        sem.release()
+        await sem.acquire()
+        sem.release()
+
+        assert sem._value == 1
 
 
 if __name__ == "__main__":

@@ -2,54 +2,59 @@
 Notification service for SubGen-Azure-Batch.
 
 This module provides notification functionality for transcription events,
-primarily for alerting when jobs fail. Currently supports Pushover.
+including per-file failures and batch completion summaries. Currently supports
+Pushover.
 
 Design:
 - Single responsibility: Only handles outbound notifications
-- Called by TranscriptionService when job status changes to FAILED
+- Called by TranscriptionService for job failures and by the batch router on completion
 - Async-first design for non-blocking notifications
 - Graceful degradation: Notification failures don't break transcription flow
 """
 
 import asyncio
 import logging
-from dataclasses import dataclass
+import re
+from collections import Counter
 from pathlib import Path
 from typing import Optional
 
 import aiohttp
 
+from app.config import NotificationConfig, get_settings
+
 logger = logging.getLogger(__name__)
 
 
-@dataclass
-class NotificationConfig:
-    """Configuration for notification services.
-    
-    Loaded from environment variables:
-    - PUSHOVER_USER_KEY: Pushover user/group key
-    - PUSHOVER_API_TOKEN: Pushover application API token
-    - NOTIFY_ON_FAILURE: Enable failure notifications (default: true)
-    
-    Note: Even if NOTIFY_ON_FAILURE is true, notifications will only be sent
-    if Pushover is properly configured (both user key and API token set).
-    """
-    # Pushover settings
-    pushover_user_key: str = ""
-    pushover_api_token: str = ""
-    
-    # Notification triggers
-    notify_on_failure: bool = True
-    
-    @property
-    def pushover_configured(self) -> bool:
-        """Check if Pushover is properly configured."""
-        return bool(self.pushover_user_key and self.pushover_api_token)
-    
-    @property
-    def is_configured(self) -> bool:
-        """Check if any notification service is configured."""
-        return self.pushover_configured
+def _media_summary(file_paths: list[str], media_roots: list[str]) -> list[str]:
+    """Group unique media paths by show/season or movie without filesystem access."""
+    groups: Counter[str] = Counter()
+    roots = [Path(root) for root in media_roots]
+    for raw_path in dict.fromkeys(file_paths):
+        path = Path(raw_path)
+        relative = next(
+            (path.relative_to(root) for root in roots if root in path.parents),
+            path,
+        )
+        if re.fullmatch(
+            r"(?:season|seizoen)[ _.-]*\d+|s\d+|specials",
+            path.parent.name,
+            flags=re.IGNORECASE,
+        ) and len(relative.parts) >= 3:
+            label = f"{path.parent.parent.name} / {path.parent.name}"
+        elif len(relative.parts) >= 2 and not relative.is_absolute():
+            label = relative.parts[0]
+        else:
+            label = path.stem
+        label = " ".join(label.split())
+        groups[label] += 1
+    lines = []
+    for label, count in list(groups.items())[:6]:
+        display = label if len(label) <= 100 else f"{label[:97]}..."
+        lines.append(f"- {display} ({count} file{'s' if count != 1 else ''})")
+    if len(groups) > 6:
+        lines.append(f"... and {len(groups) - 6} more titles")
+    return lines
 
 
 class NotificationService:
@@ -87,26 +92,8 @@ class NotificationService:
     
     @classmethod
     def _load_config(cls) -> NotificationConfig:
-        """Load notification configuration from environment."""
-        import os
-        
-        def get_bool(value: str, default: bool = False) -> bool:
-            if not value:
-                return default
-            return value.lower() in ('true', '1', 'yes', 'on')
-        
-        pushover_user = os.getenv('PUSHOVER_USER_KEY', '')
-        pushover_token = os.getenv('PUSHOVER_API_TOKEN', '')
-        
-        # Default notify_on_failure to True
-        # Even if True, won't send if Pushover isn't configured
-        notify_on_failure = get_bool(os.getenv('NOTIFY_ON_FAILURE', 'true'), default=True)
-        
-        return NotificationConfig(
-            pushover_user_key=pushover_user,
-            pushover_api_token=pushover_token,
-            notify_on_failure=notify_on_failure,
-        )
+        """Load notification configuration from application settings."""
+        return get_settings().notification
     
     @classmethod
     def reset_instance(cls) -> None:
@@ -189,8 +176,8 @@ class NotificationService:
                     logger.error(f"Pushover notification failed (HTTP {response.status}): {error_text}")
                     return False
                     
-        except Exception as e:
-            logger.error(f"Pushover notification error: {e}")
+        except Exception:
+            logger.exception("Pushover notification request failed")
             return False
     
     async def notify_job_failed(
@@ -244,6 +231,61 @@ class NotificationService:
             )
         
         return success
+
+    async def notify_batch_completion(
+        self,
+        completed_jobs: int,
+        failed_jobs: int,
+        skipped_jobs: int,
+        batch_id: str | None = None,
+        file_paths: list[str] | None = None,
+        languages: list[str] | None = None,
+        failed_files: list[str] | None = None,
+    ) -> bool:
+        """Send a batch summary when its configured outcome is reached."""
+        if failed_jobs:
+            if not self._config.notify_on_failure:
+                logger.debug("Batch error notifications disabled, skipping")
+                return False
+            title = "⚠️ SubGen-Azure-Batch: Batch Completed with Errors"
+        else:
+            if not self._config.notify_on_success:
+                logger.debug("Batch success notifications disabled, skipping")
+                return False
+            title = "✅ SubGen-Azure-Batch: Batch Completed Successfully"
+
+        if not self._config.is_configured:
+            logger.debug("Pushover is not configured, skipping batch summary")
+            return False
+
+        total_jobs = completed_jobs + failed_jobs + skipped_jobs
+        lines = [
+            f"Total: {total_jobs}",
+            f"Completed: {completed_jobs}",
+            f"Failed: {failed_jobs}",
+            f"Skipped: {skipped_jobs}",
+        ]
+        if batch_id:
+            lines.insert(0, f"Batch: {' '.join(batch_id.split())[:64]}")
+        if languages:
+            language_text = ", ".join(dict.fromkeys(languages))
+            lines.append(f"Languages: {' '.join(language_text.split())[:100]}")
+        if file_paths:
+            unique_count = len(set(file_paths))
+            lines.append(f"Media: {unique_count} unique file(s)")
+            lines.extend(_media_summary(file_paths, get_settings().media_folders))
+        if failed_files:
+            names = [
+                " ".join(Path(path).name.split())[:100]
+                for path in dict.fromkeys(failed_files)
+            ]
+            lines.append(f"Failed files: {', '.join(names[:2])}")
+            if len(names) > 2:
+                lines.append(f"... and {len(names) - 2} more failed files")
+        message = "\n".join(lines)
+        if len(message) > 1024:
+            message = f"{message[:1021]}..."
+        return await self.send_pushover(title=title, message=message)
     
     async def test_notification(self) -> dict:
         """
@@ -292,4 +334,30 @@ async def notify_failure(
         )
     except Exception as e:
         logger.error(f"Failed to send failure notification: {e}")
+        return False
+
+
+async def notify_batch_completion(
+    completed_jobs: int,
+    failed_jobs: int,
+    skipped_jobs: int,
+    batch_id: str | None = None,
+    file_paths: list[str] | None = None,
+    languages: list[str] | None = None,
+    failed_files: list[str] | None = None,
+) -> bool:
+    """Send a batch completion summary without propagating notification errors."""
+    try:
+        notifier = NotificationService.get_instance()
+        return await notifier.notify_batch_completion(
+            completed_jobs=completed_jobs,
+            failed_jobs=failed_jobs,
+            skipped_jobs=skipped_jobs,
+            batch_id=batch_id,
+            file_paths=file_paths,
+            languages=languages,
+            failed_files=failed_files,
+        )
+    except Exception as e:
+        logger.error(f"Failed to send batch completion notification: {e}")
         return False

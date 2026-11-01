@@ -26,6 +26,12 @@ services:
       - DEBUG=${DEBUG:-false}
       - MEDIA_FOLDERS=${MEDIA_FOLDERS:-/tv,/movies}
       - SUBTITLE_LANGUAGE=${SUBTITLE_LANGUAGE:-}
+
+      # ===== HOSTED AGENT API / MCP (/mcp on port 9000) =====
+      # Empty API key disables agent access; use at least 32 random characters.
+      - AGENT_API_KEY=${AGENT_API_KEY:-}
+      # Empty accepts any host; set an allowlist for DNS-rebinding protection.
+      - AGENT_MCP_ALLOWED_HOSTS=${AGENT_MCP_ALLOWED_HOSTS:-}
       
       # ===== PROCESSING SETTINGS =====
       - CONCURRENT_TRANSCRIPTIONS=${CONCURRENT_TRANSCRIPTIONS:-50}
@@ -82,6 +88,7 @@ services:
       - PUSHOVER_USER_KEY=${PUSHOVER_USER_KEY:-}
       - PUSHOVER_API_TOKEN=${PUSHOVER_API_TOKEN:-}
       - NOTIFY_ON_FAILURE=${NOTIFY_ON_FAILURE:-true}
+      - NOTIFY_ON_SUCCESS=${NOTIFY_ON_SUCCESS:-false}
     
     volumes:
       # Mount your media directories (adjust paths as needed)

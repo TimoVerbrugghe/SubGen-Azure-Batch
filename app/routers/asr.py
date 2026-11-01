@@ -13,13 +13,16 @@ import string
 import time
 import wave
 from pathlib import Path
-from typing import Optional, Union
+from typing import Literal, Optional, Union
 
 from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 from fastapi.responses import Response, StreamingResponse
 
-from app.config import (SUBGEN_AZURE_BATCH_VERSION, get_settings,
-                        require_azure_configured)
+from app.config import (
+    SUBGEN_AZURE_BATCH_VERSION,
+    get_settings,
+    require_azure_configured,
+)
 from app.transcription_service import JobSource, TranscriptionService
 from app.utils.audio_extractor import extract_audio_segment, make_temp_dir
 from app.utils.azure_batch_transcriber import AzureBatchTranscriber
@@ -62,12 +65,14 @@ async def get_status():
 @router.post("/asr")
 async def transcribe_audio(
     audio_file: UploadFile = File(...),
-    task: Union[str, None] = Query(default="transcribe", enum=["transcribe", "translate"]),
+    task: Union[Literal["transcribe", "translate"], None] = Query(default="transcribe"),
     language: Union[str, None] = Query(default=None),
     video_file: Union[str, None] = Query(default=None),  # For logging (from Bazarr)
     initial_prompt: Union[str, None] = Query(default=None),  # Not used, kept for compatibility
     encode: bool = Query(default=True, description="Encode audio first through ffmpeg"),
-    output: Union[str, None] = Query(default="srt", enum=["txt", "vtt", "srt", "tsv", "json"]),
+    output: Union[Literal["txt", "vtt", "srt", "tsv", "json"], None] = Query(
+        default="srt"
+    ),
     word_timestamps: bool = Query(default=False, description="Word-level timestamps"),
 ):
     """

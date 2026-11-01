@@ -9,7 +9,6 @@ Tests cover:
 """
 
 import asyncio
-import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -65,18 +64,30 @@ class TestNotificationConfig:
         config = NotificationConfig()
         assert config.is_configured is False
 
+    def test_batch_success_notifications_are_disabled_by_default(self):
+        """Test successful batch summaries require explicit opt-in."""
+        from app.utils.notification_service import NotificationConfig
+
+        assert NotificationConfig().notify_on_success is False
+
 
 class TestNotificationServiceSingleton:
     """Test NotificationService singleton behavior."""
     
     def test_get_instance_returns_same_object(self):
         """Test that get_instance returns the same singleton."""
-        from app.utils.notification_service import NotificationService
+        from app.utils.notification_service import (
+            NotificationConfig,
+            NotificationService,
+        )
 
         # Reset singleton
         NotificationService.reset_instance()
         
-        with patch.dict(os.environ, {}, clear=True):
+        with patch(
+            "app.utils.notification_service.get_settings",
+            return_value=MagicMock(notification=NotificationConfig()),
+        ):
             instance1 = NotificationService.get_instance()
             instance2 = NotificationService.get_instance()
             
@@ -89,7 +100,12 @@ class TestNotificationServiceSingleton:
         """Test that reset_instance clears the singleton."""
         from app.utils.notification_service import NotificationService
         
-        with patch.dict(os.environ, {}, clear=True):
+        from app.utils.notification_service import NotificationConfig
+
+        with patch(
+            "app.utils.notification_service.get_settings",
+            return_value=MagicMock(notification=NotificationConfig()),
+        ):
             instance1 = NotificationService.get_instance()
             NotificationService.reset_instance()
             instance2 = NotificationService.get_instance()
@@ -104,36 +120,42 @@ class TestNotificationServiceSingleton:
 class TestNotificationServiceConfig:
     """Test NotificationService configuration loading."""
     
-    def test_loads_pushover_config_from_env(self):
-        """Test that Pushover config is loaded from environment."""
+    def test_loads_pushover_config_from_settings(self, mock_settings):
+        """Test that Pushover config is loaded from application settings."""
         from app.utils.notification_service import NotificationService
-        
+
         NotificationService.reset_instance()
-        
-        env = {
-            'PUSHOVER_USER_KEY': 'test-user-key',
-            'PUSHOVER_API_TOKEN': 'test-api-token',
-            'NOTIFY_ON_FAILURE': 'true'
-        }
-        
-        with patch.dict(os.environ, env, clear=True):
+        mock_settings.notification.pushover_user_key = "test-user-key"
+        mock_settings.notification.pushover_api_token = "test-api-token"
+        mock_settings.notification.notify_on_failure = True
+        mock_settings.notification.notify_on_success = True
+
+        with patch(
+            "app.utils.notification_service.get_settings",
+            return_value=mock_settings,
+        ):
             instance = NotificationService.get_instance()
-            
+
             assert instance.config.pushover_user_key == 'test-user-key'
             assert instance.config.pushover_api_token == 'test-api-token'
             assert instance.config.notify_on_failure is True
+            assert instance.config.notify_on_success is True
         
         NotificationService.reset_instance()
     
-    def test_notify_on_failure_defaults_to_true(self):
-        """Test that notify_on_failure defaults to True."""
+    def test_uses_notification_defaults_from_settings(self, mock_settings):
+        """Test notification trigger defaults are read from Settings."""
         from app.utils.notification_service import NotificationService
-        
+
         NotificationService.reset_instance()
-        
-        with patch.dict(os.environ, {}, clear=True):
+
+        with patch(
+            "app.utils.notification_service.get_settings",
+            return_value=mock_settings,
+        ):
             instance = NotificationService.get_instance()
             assert instance.config.notify_on_failure is True
+            assert instance.config.notify_on_success is False
         
         NotificationService.reset_instance()
 
@@ -210,6 +232,24 @@ class TestSendPushover:
         
         assert result is False
 
+    @pytest.mark.asyncio
+    async def test_send_pushover_logs_network_failure(self, configured_service, caplog):
+        """Test network errors are logged and reported without raising."""
+        import aiohttp
+
+        with patch.object(
+            configured_service,
+            "_get_session",
+            side_effect=aiohttp.ClientError("network unavailable"),
+        ):
+            result = await configured_service.send_pushover(
+                title="Test Title",
+                message="Test Message",
+            )
+
+        assert result is False
+        assert "Pushover notification request failed" in caplog.text
+
 
 class TestNotifyJobFailed:
     """Test job failure notification."""
@@ -269,22 +309,197 @@ class TestNotifyJobFailed:
         )
         
         assert result is False
-    
+
     @pytest.mark.asyncio
     async def test_notify_job_failed_not_configured(self):
-        """Test that notifications are skipped when not configured."""
-        from app.utils.notification_service import (NotificationConfig,
-                                              NotificationService)
-        
-        config = NotificationConfig(notify_on_failure=True)  # Enabled but not configured
-        service = NotificationService(config)
-        
+        """Test that notifications are skipped without Pushover credentials."""
+        from app.utils.notification_service import (
+            NotificationConfig,
+            NotificationService,
+        )
+
+        service = NotificationService(NotificationConfig(notify_on_failure=True))
+
         result = await service.notify_job_failed(
             file_path="/media/file.mkv",
-            error="Test error"
+            error="Test error",
         )
-        
+
         assert result is False
+
+
+class TestNotifyBatchCompletion:
+    """Test batch completion summaries."""
+
+    @pytest.fixture
+    def configured_service(self):
+        from app.utils.notification_service import (
+            NotificationConfig,
+            NotificationService,
+        )
+
+        return NotificationService(
+            NotificationConfig(
+                pushover_user_key="test-user",
+                pushover_api_token="test-token",
+                notify_on_failure=True,
+                notify_on_success=True,
+            )
+        )
+
+    @pytest.mark.asyncio
+    async def test_sends_success_summary_with_counters(self, configured_service):
+        with patch.object(
+            configured_service, "send_pushover", new_callable=AsyncMock
+        ) as send:
+            send.return_value = True
+
+            result = await configured_service.notify_batch_completion(3, 0, 2)
+
+        assert result is True
+        send.assert_awaited_once()
+        title = send.await_args.kwargs["title"]
+        message = send.await_args.kwargs["message"]
+        assert "Successfully" in title
+        assert "Total: 5" in message
+        assert "Completed: 3" in message
+        assert "Failed: 0" in message
+        assert "Skipped: 2" in message
+
+    @pytest.mark.asyncio
+    async def test_sends_error_summary(self, configured_service):
+        with patch.object(
+            configured_service, "send_pushover", new_callable=AsyncMock
+        ) as send:
+            send.return_value = True
+
+            result = await configured_service.notify_batch_completion(1, 2, 0)
+
+        assert result is True
+        assert "Errors" in send.await_args.kwargs["title"]
+        assert "Failed: 2" in send.await_args.kwargs["message"]
+
+    @pytest.mark.asyncio
+    async def test_should_identify_shows_movies_and_languages_when_batch_finishes(
+        self, configured_service, mock_settings
+    ):
+        mock_settings.media_folders = ["/tv", "/movies"]
+        files = [
+            "/tv/Maxima (2024)/Season 02/Maxima s02e05.mkv",
+            "/tv/Maxima (2024)/Season 02/Maxima s02e06.mkv",
+            "/tv/Maxima (2024)/Season 02/Maxima s02e06.mkv",
+            "/movies/Example Movie (2025)/release-name.mkv",
+            "/movies/Loose Movie.mkv",
+        ]
+        with (
+            patch("app.utils.notification_service.get_settings", return_value=mock_settings),
+            patch.object(configured_service, "send_pushover", new_callable=AsyncMock) as send,
+        ):
+            await configured_service.notify_batch_completion(
+                5, 0, 0, batch_id="03624ed5", file_paths=files,
+                languages=["nl-NL", "en-US", "nl-NL"],
+            )
+        assert send.await_args.kwargs["message"] == (
+            "Batch: 03624ed5\nTotal: 5\nCompleted: 5\nFailed: 0\nSkipped: 0\n"
+            "Languages: nl-NL, en-US\nMedia: 4 unique file(s)\n"
+            "- Maxima (2024) / Season 02 (2 files)\n"
+            "- Example Movie (2025) (1 file)\n- Loose Movie (1 file)"
+        )
+
+    @pytest.mark.asyncio
+    async def test_should_include_failed_filenames_when_batch_has_errors(
+        self, configured_service, mock_settings
+    ):
+        with (
+            patch("app.utils.notification_service.get_settings", return_value=mock_settings),
+            patch.object(configured_service, "send_pushover", new_callable=AsyncMock) as send,
+        ):
+            await configured_service.notify_batch_completion(
+                1, 3, 0, batch_id="error-batch",
+                failed_files=["/tv/a.mkv", "/tv/b.mkv", "/tv/c.mkv"],
+            )
+        assert send.await_args.kwargs["message"] == (
+            "Batch: error-batch\nTotal: 4\nCompleted: 1\nFailed: 3\nSkipped: 0\n"
+            "Failed files: a.mkv, b.mkv\n... and 1 more failed files"
+        )
+
+    @pytest.mark.asyncio
+    async def test_should_bound_large_summary_and_report_omitted_titles(
+        self, configured_service, mock_settings
+    ):
+        mock_settings.media_folders = ["/movies"]
+        with (
+            patch("app.utils.notification_service.get_settings", return_value=mock_settings),
+            patch.object(configured_service, "send_pushover", new_callable=AsyncMock) as send,
+        ):
+            await configured_service.notify_batch_completion(
+                50, 2, 0, batch_id="large-batch",
+                file_paths=[f"/movies/{index}-{'x' * 200}.mkv" for index in range(50)],
+                languages=["nl-NL"],
+                failed_files=[f"/movies/{'y' * 200}.mkv", f"/movies/{'z' * 200}.mkv"],
+            )
+        message = send.await_args.kwargs["message"]
+        assert len(message) <= 1024
+        assert "... and 44 more titles" in message
+        assert "Batch: large-batch" in message
+
+    @pytest.mark.asyncio
+    async def test_success_summary_is_disabled_by_default(self):
+        from app.utils.notification_service import (
+            NotificationConfig,
+            NotificationService,
+        )
+
+        service = NotificationService(
+            NotificationConfig(
+                pushover_user_key="test-user",
+                pushover_api_token="test-token",
+            )
+        )
+
+        with patch.object(
+            service, "send_pushover", new_callable=AsyncMock
+        ) as send:
+            result = await service.notify_batch_completion(1, 0, 0)
+
+        assert result is False
+        send.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_missing_credentials_skip_error_summary(self):
+        from app.utils.notification_service import (
+            NotificationConfig,
+            NotificationService,
+        )
+
+        service = NotificationService(NotificationConfig(notify_on_failure=True))
+
+        result = await service.notify_batch_completion(0, 1, 0)
+
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_error_summary_respects_failure_notification_setting(self):
+        from app.utils.notification_service import (
+            NotificationConfig,
+            NotificationService,
+        )
+
+        service = NotificationService(
+            NotificationConfig(
+                pushover_user_key="test-user",
+                pushover_api_token="test-token",
+                notify_on_failure=False,
+            )
+        )
+
+        with patch.object(
+            service, "send_pushover", new_callable=AsyncMock
+        ) as send:
+            result = await service.notify_batch_completion(0, 1, 0)
+
+        assert result is False
+        send.assert_not_awaited()
 
 
 class TestTestNotification:

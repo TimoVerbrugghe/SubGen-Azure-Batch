@@ -9,6 +9,7 @@ Tests cover:
 
 import asyncio
 import os
+import shutil
 import tempfile
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -327,6 +328,55 @@ class TestExtractAudio:
             with patch('asyncio.create_subprocess_exec', side_effect=FileNotFoundError()):
                 with pytest.raises(RuntimeError, match="FFmpeg not found"):
                     await extract_audio(temp_video_file)
+
+    @pytest.mark.asyncio
+    async def test_extract_audio_cancellation_kills_process_and_removes_output(self):
+        """Cancelling extraction stops FFmpeg and removes the partial output."""
+        from app.utils.audio_extractor import extract_audio
+
+        test_dir = Path(__file__).parent / "data" / "audio-cancel"
+        shutil.rmtree(test_dir, ignore_errors=True)
+        test_dir.mkdir(parents=True)
+        source = test_dir / "input.mkv"
+        output = test_dir / "partial.ogg"
+        source.write_bytes(b"media")
+        output.write_bytes(b"partial output")
+
+        class FakeProcess:
+            def __init__(self):
+                self.returncode = None
+                self.started = asyncio.Event()
+                self.killed = False
+
+            async def communicate(self):
+                self.started.set()
+                await asyncio.Event().wait()
+
+            def kill(self):
+                self.killed = True
+                self.returncode = -9
+
+            async def wait(self):
+                return self.returncode
+
+        process = FakeProcess()
+        try:
+            with patch(
+                "app.utils.audio_extractor.asyncio.create_subprocess_exec",
+                return_value=process,
+            ):
+                task = asyncio.create_task(
+                    extract_audio(str(source), output_path=str(output))
+                )
+                await process.started.wait()
+                task.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await task
+
+            assert process.killed is True
+            assert output.exists() is False
+        finally:
+            shutil.rmtree(test_dir, ignore_errors=True)
 
 
 class TestPrepareAudioForTranscription:
