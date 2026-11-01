@@ -380,6 +380,70 @@ class TestNotifyBatchCompletion:
         assert "Failed: 2" in send.await_args.kwargs["message"]
 
     @pytest.mark.asyncio
+    async def test_should_identify_shows_movies_and_languages_when_batch_finishes(
+        self, configured_service, mock_settings
+    ):
+        mock_settings.media_folders = ["/tv", "/movies"]
+        files = [
+            "/tv/Maxima (2024)/Season 02/Maxima s02e05.mkv",
+            "/tv/Maxima (2024)/Season 02/Maxima s02e06.mkv",
+            "/tv/Maxima (2024)/Season 02/Maxima s02e06.mkv",
+            "/movies/Example Movie (2025)/release-name.mkv",
+            "/movies/Loose Movie.mkv",
+        ]
+        with (
+            patch("app.utils.notification_service.get_settings", return_value=mock_settings),
+            patch.object(configured_service, "send_pushover", new_callable=AsyncMock) as send,
+        ):
+            await configured_service.notify_batch_completion(
+                5, 0, 0, batch_id="03624ed5", file_paths=files,
+                languages=["nl-NL", "en-US", "nl-NL"],
+            )
+        assert send.await_args.kwargs["message"] == (
+            "Batch: 03624ed5\nTotal: 5\nCompleted: 5\nFailed: 0\nSkipped: 0\n"
+            "Languages: nl-NL, en-US\nMedia: 4 unique file(s)\n"
+            "- Maxima (2024) / Season 02 (2 files)\n"
+            "- Example Movie (2025) (1 file)\n- Loose Movie (1 file)"
+        )
+
+    @pytest.mark.asyncio
+    async def test_should_include_failed_filenames_when_batch_has_errors(
+        self, configured_service, mock_settings
+    ):
+        with (
+            patch("app.utils.notification_service.get_settings", return_value=mock_settings),
+            patch.object(configured_service, "send_pushover", new_callable=AsyncMock) as send,
+        ):
+            await configured_service.notify_batch_completion(
+                1, 3, 0, batch_id="error-batch",
+                failed_files=["/tv/a.mkv", "/tv/b.mkv", "/tv/c.mkv"],
+            )
+        assert send.await_args.kwargs["message"] == (
+            "Batch: error-batch\nTotal: 4\nCompleted: 1\nFailed: 3\nSkipped: 0\n"
+            "Failed files: a.mkv, b.mkv\n... and 1 more failed files"
+        )
+
+    @pytest.mark.asyncio
+    async def test_should_bound_large_summary_and_report_omitted_titles(
+        self, configured_service, mock_settings
+    ):
+        mock_settings.media_folders = ["/movies"]
+        with (
+            patch("app.utils.notification_service.get_settings", return_value=mock_settings),
+            patch.object(configured_service, "send_pushover", new_callable=AsyncMock) as send,
+        ):
+            await configured_service.notify_batch_completion(
+                50, 2, 0, batch_id="large-batch",
+                file_paths=[f"/movies/{index}-{'x' * 200}.mkv" for index in range(50)],
+                languages=["nl-NL"],
+                failed_files=[f"/movies/{'y' * 200}.mkv", f"/movies/{'z' * 200}.mkv"],
+            )
+        message = send.await_args.kwargs["message"]
+        assert len(message) <= 1024
+        assert "... and 44 more titles" in message
+        assert "Batch: large-batch" in message
+
+    @pytest.mark.asyncio
     async def test_success_summary_is_disabled_by_default(self):
         from app.utils.notification_service import (
             NotificationConfig,

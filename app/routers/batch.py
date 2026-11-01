@@ -462,6 +462,14 @@ async def _notify_batch_completion_once(
             completed_jobs=completed_jobs,
             failed_jobs=failed_jobs,
             skipped_jobs=skipped_jobs,
+            batch_id=session_id,
+            file_paths=[job.file_path for job in session.jobs.values()],
+            languages=[job.language for job in session.jobs.values() if job.language],
+            failed_files=[
+                job.file_path
+                for job in session.jobs.values()
+                if job.status == ServiceJobStatus.FAILED
+            ],
         )
     except Exception:
         logger.exception(f"[{session_id}] Batch completion notification failed")
