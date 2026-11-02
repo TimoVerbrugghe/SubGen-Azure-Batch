@@ -8,6 +8,7 @@ import os
 import sys
 import time
 from typing import Optional
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 import requests
@@ -15,11 +16,72 @@ import requests
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app.utils.azure_batch_transcriber import (AzureBatchTranscriber,
-                                         TranscriptionJob, TranscriptionResult,
-                                         TranscriptionSegment,
-                                         TranscriptionStatus)
+from app.utils.azure_batch_transcriber import (
+    AzureBatchTranscriber,
+    TranscriptionJob,
+    TranscriptionResult,
+    TranscriptionSegment,
+    TranscriptionStatus,
+)
 from app.utils.subtitle_utils import parse_srt, validate_srt
+
+
+class TestAzureBatchLanguageIdentification:
+    """Verify v3.2 language-identification payloads without contacting Azure."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "candidates",
+        [None, ["en-US", "nl-NL", "es-ES", "fr-FR"]],
+    )
+    async def test_should_nest_language_identification_in_properties(
+        self, candidates: list[str] | None, mock_settings: MagicMock
+    ) -> None:
+        """Azure v3.2 requires languageIdentification inside transcription properties."""
+        response = MagicMock(status=201)
+        response.__aenter__ = AsyncMock(return_value=response)
+        response.__aexit__ = AsyncMock(return_value=False)
+        response.json = AsyncMock(
+            return_value={
+                "self": f"{mock_settings.azure.api_base_url}/transcriptions/test-job",
+                "status": "NotStarted",
+                "locale": "en-US",
+                "displayName": "language detection",
+                "createdDateTime": "2025-01-01T00:00:00Z",
+                "lastActionDateTime": "2025-01-01T00:00:00Z",
+            }
+        )
+        session = MagicMock()
+        session.post.return_value = response
+        session.close = AsyncMock()
+        with (
+            patch(
+                "app.utils.azure_batch_transcriber.get_settings",
+                return_value=mock_settings,
+            ),
+            patch(
+                "app.utils.azure_batch_transcriber.aiohttp.ClientSession",
+                return_value=session,
+            ),
+        ):
+            transcriber = AzureBatchTranscriber()
+            try:
+                await transcriber.create_transcription(
+                    "https://example.com/audio",
+                    "en-US",
+                    candidate_locales=candidates,
+                )
+            finally:
+                await transcriber.close()
+        payload = session.post.call_args.kwargs["json"]
+        assert "languageIdentification" not in payload
+        if candidates is None:
+            assert "languageIdentification" not in payload["properties"]
+        else:
+            assert payload["properties"]["languageIdentification"] == {
+                "mode": "Single",
+                "candidateLocales": candidates,
+            }
 
 
 class TestTranscriptionResultClass:

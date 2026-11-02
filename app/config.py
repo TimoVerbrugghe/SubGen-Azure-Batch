@@ -4,6 +4,7 @@ Configuration management for SubGen-Azure-Batch.
 Loads configuration from environment variables with sensible defaults.
 """
 
+import math
 import os
 from dataclasses import dataclass, field
 from functools import lru_cache
@@ -332,6 +333,7 @@ class Settings:
 
     # Server settings
     debug: bool = False
+    asr_keepalive_interval: float = 15.0
     agent_api_key: str = ""
     agent_mcp_allowed_hosts: list[str] = field(default_factory=list)
 
@@ -343,7 +345,9 @@ class Settings:
     subtitle_language: str = ""
 
     # Processing settings
-    concurrent_transcriptions: int = 10  # full pipeline slots: extraction + upload + Azure polling
+    concurrent_transcriptions: int = (
+        10  # full pipeline slots: extraction + upload + Azure polling
+    )
     job_poll_interval: int = 30  # seconds between Azure status polls
     transcription_timeout: int = 3600  # seconds before giving up on a job
     max_concurrent_uploads: int = 2  # parallel blob uploads at any one time
@@ -375,12 +379,21 @@ class Settings:
     emby: EmbyConfig = field(default_factory=EmbyConfig)
     notification: NotificationConfig = field(default_factory=NotificationConfig)
 
+    def __post_init__(self) -> None:
+        """Reject invalid ASR heartbeat intervals instead of disabling them silently."""
+        if (
+            not math.isfinite(self.asr_keepalive_interval)
+            or self.asr_keepalive_interval < 0
+        ):
+            raise ValueError("ASR_KEEPALIVE_INTERVAL must be finite and non-negative")
+
     @classmethod
     def from_env(cls) -> "Settings":
         """Load settings from environment variables."""
         return cls(
             # Server settings
             debug=get_bool(os.getenv("DEBUG", "false")),
+            asr_keepalive_interval=float(os.getenv("ASR_KEEPALIVE_INTERVAL", "15")),
             agent_api_key=os.getenv("AGENT_API_KEY", ""),
             agent_mcp_allowed_hosts=get_list(os.getenv("AGENT_MCP_ALLOWED_HOSTS", "")),
             # UI settings

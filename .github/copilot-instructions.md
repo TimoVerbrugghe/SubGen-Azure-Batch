@@ -1,5 +1,11 @@
 # Copilot Instructions — SubGen-Azure-Batch
 
+## Documentation
+
+- Keep `README.md` user-facing: overview, setup, configuration, usage, and concise practical troubleshooting.
+- Put technical implementation details, protocol internals, diagnostic reasoning, and maintainer notes in `.github/copilot-instructions.md`, not in the README.
+- When code changes affect users, update the README with what they need to do or expect; keep the underlying technical explanation here rather than duplicating it.
+
 ## Language: Python
 
 - Python 3.10+ compatible syntax; avoid 3.11+ exclusive features in production paths
@@ -98,3 +104,52 @@ When you change these files, you **must** also update:
 | `.github/workflows/tests.yml` — change test command | `AGENTS.md` (Build & Run section) |
 | `Dockerfile` — change base image or Python version | `tests.yml` (`python-version` matrix), `AGENTS.md` (Tech Stack section) |
 | `app/transcription_service.py` — change session/job tracking | `app/routers/batch.py`, `app/routers/asr.py`, `app/routers/webhooks.py` (all consume TranscriptionService) |
+
+## Bazarr ASR Transport and ConnectionError Diagnostics
+
+### Provider status and request flow
+
+- Bazarr's [Whisper provider](https://github.com/morpheus65535/bazarr/blob/v1.5.6/custom_libs/subliminal_patch/providers/whisperai.py) uploads raw 16-bit, 16 kHz mono PCM as multipart `audio_file` with `encode=false` to `POST /detect-language` or `POST /asr`, then consumes the complete JSON or SRT response.
+- **System > Providers** displays stored provider-throttling state, not a connectivity heartbeat. Refresh reloads that state; Reset clears errors/backoff; Good does not prove a successful request. Backoff duration depends on the Bazarr version, so inspect the deployed version and logs rather than assuming five minutes.
+- Manual search can call language detection when audio-language metadata is missing or ambiguous; otherwise it can return a candidate without contacting SubGen. Downloading a `whisperai` candidate triggers the real ASR request.
+- Bazarr 1.5.6 consumes `response.content` without checking the HTTP status before logging completion. A rejected upload can therefore appear as Completed/Good and subsequently fail subtitle validation. Verify the ASR response, saved SRT, and Bazarr job completion, not just the provider status.
+- Distinguish inbound Bazarr ASR from SubGen's outbound scan notifications: `BAZARR_URL` only configures the latter.
+
+### Uploads, temporary storage, and timeouts
+
+- A `ConnectionError` identifies a transport failure, not a specific Azure error. Inspect the full Bazarr exception and correlate both applications' logs to distinguish DNS/connect failures, upload stalls, idle responses, and pod restarts/OOM kills.
+- Bazarr's [HTTP client](https://github.com/morpheus65535/bazarr/blob/v1.5.6/libs/urllib3/connectionpool.py) applies the connection timeout while sending multipart uploads, then switches to the read timeout. The five-second default can cause upload failures before SubGen enters the route handler; recommend 60 seconds for large uploads or slower networks.
+- An hour of raw PCM is approximately 110 MiB. Allow large multipart uploads through proxies; response heartbeats cannot protect an upload that has not finished.
+- Starlette spills large uploads to Python's temporary directory before calling the route handler (default spool threshold: 1 MiB). With `readOnlyRootFilesystem`, mount a writable temporary volume and set `TMPDIR` to it, for example `/transcode`. `TRANSCODE_DIR` alone does not configure Python's temporary directory.
+- No writable temporary directory causes `FileNotFoundError: No usable temporary directory found`, wrapped by FastAPI as HTTP 400 with `There was an error parsing the body`. Reproduce safely with an upload larger than 1 MiB and an invalid `task`: successful parsing should reach query validation and return HTTP 422 without creating an Azure job.
+- Bazarr's transcription/translation timeout (normally 3600 seconds) is a socket read-idle timeout, not a total-duration limit. SubGen's `TRANSCRIPTION_TIMEOUT` sets a processing deadline including queueing, extraction, and Azure calls. Cancellation performs cleanup, so request termination may take longer than the deadline.
+- `UVICORN_TIMEOUT_KEEP_ALIVE` only controls idle HTTP connections **between** requests; it does not protect active uploads or transcriptions.
+- Verify reachability from the Bazarr host/container. Inside Kubernetes, use `http://subgen.<namespace>.svc.cluster.local:9000`; outside it, use a reachable LoadBalancer or ingress hostname. ClusterIP addresses and cluster DNS usually are not reachable externally.
+
+For basic connectivity checks, substitute Bazarr's configured SubGen base URL:
+
+```bash
+curl --connect-timeout 10 --max-time 15 http://<subgen-host>:9000/health
+curl --connect-timeout 10 --max-time 15 http://<subgen-host>:9000/status
+```
+
+### Response transport invariants
+
+- SRT ASR and JSON language detection send an initial blank line and repeat it every `ASR_KEEPALIVE_INTERVAL` seconds (default 15). Whitespace is valid in both formats and prevents response-idle disconnects while Azure queues or processes work.
+- TXT/VTT and other ASR formats stay buffered. Set the interval to 0 for clients requiring an exact buffered body and `Content-Length`; forced language detection returns immediately without Azure.
+- Disable response buffering for both `/asr` and `/detect-language`, not just `/mcp`. SubGen sends `X-Accel-Buffering: no`, but only proxies honoring that header act on it.
+- For ingress-nginx, the following annotations disable buffering and extend proxy timeouts:
+
+```yaml
+metadata:
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+```
+
+- These annotations do not configure Traefik, Tailscale, or other controllers; use the controller's corresponding settings. Prefer direct Service access where possible to bypass HTTP proxy timeouts.
+- Heartbeats cannot fix connection refusals, DNS failures, stalled uploads, or pod restarts/OOM kills.
+- Log real processing failures; never substitute successful-looking subtitles or an undetermined language. After streaming headers are sent, failure/timeout must abort the stream rather than complete it. With heartbeats disabled, known processing errors return HTTP 500/504 JSON.
+- Preserve stream failure and disconnect propagation through middleware. MCP authentication must remain pass-through ASGI middleware rather than wrapping the response in function-style HTTP middleware.
+- Language detection uses the shared Bazarr-priority processing pool and job tracking. Require one to four candidate locales; unsupported forced languages or invalid candidate counts return HTTP 503. Query offsets must be non-negative and sample lengths positive.

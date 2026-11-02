@@ -9,12 +9,24 @@ Tests cover:
 """
 
 import asyncio
+import io
+import wave
+from collections.abc import Iterator
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
+from app.transcription_service import (
+    JobSource,
+    JobStatus,
+    PrioritySemaphore,
+    TranscriptionJob,
+    TranscriptionService,
+)
+from app.utils.azure_batch_transcriber import TranscriptionResult
 
 
 @pytest.fixture
@@ -291,8 +303,7 @@ class TestTranscriptionJob:
     
     def test_job_creation(self):
         """Test creating a transcription job."""
-        from app.transcription_service import (JobSource, JobStatus,
-                                               TranscriptionJob)
+        from app.transcription_service import JobSource, JobStatus, TranscriptionJob
         
         job = TranscriptionJob(
             id="test-123",
@@ -311,8 +322,7 @@ class TestTranscriptionJob:
     
     def test_get_status_text(self):
         """Test human-readable status text."""
-        from app.transcription_service import (JobSource, JobStatus,
-                                               TranscriptionJob)
+        from app.transcription_service import JobSource, JobStatus, TranscriptionJob
         
         job = TranscriptionJob(
             id="test",
@@ -344,8 +354,7 @@ class TestTranscriptionJob:
     
     def test_to_dict(self):
         """Test job serialization to dictionary."""
-        from app.transcription_service import (JobSource, JobStatus,
-                                               TranscriptionJob)
+        from app.transcription_service import JobSource, JobStatus, TranscriptionJob
         
         job = TranscriptionJob(
             id="test-123",
@@ -383,9 +392,12 @@ class TestTranscriptionSession:
     
     def test_session_to_dict(self):
         """Test session serialization to dictionary."""
-        from app.transcription_service import (JobSource, JobStatus,
-                                               TranscriptionJob,
-                                               TranscriptionSession)
+        from app.transcription_service import (
+            JobSource,
+            JobStatus,
+            TranscriptionJob,
+            TranscriptionSession,
+        )
         
         session = TranscriptionSession(
             id="session-123",
@@ -524,8 +536,7 @@ class TestTranscriptionServiceJobs:
     @pytest.mark.asyncio
     async def test_update_job_status(self):
         """Test updating job status."""
-        from app.transcription_service import (JobSource, JobStatus,
-                                               TranscriptionService)
+        from app.transcription_service import JobSource, JobStatus, TranscriptionService
         
         session = await TranscriptionService.create_session(source=JobSource.UI)
         job = await TranscriptionService.add_job(
@@ -547,8 +558,7 @@ class TestTranscriptionServiceJobs:
     @pytest.mark.asyncio
     async def test_update_job_status_completed(self):
         """Test updating job to completed status."""
-        from app.transcription_service import (JobSource, JobStatus,
-                                               TranscriptionService)
+        from app.transcription_service import JobSource, JobStatus, TranscriptionService
         
         session = await TranscriptionService.create_session(source=JobSource.UI)
         job = await TranscriptionService.add_job(
@@ -572,8 +582,7 @@ class TestTranscriptionServiceJobs:
     @pytest.mark.asyncio
     async def test_update_job_status_failed(self):
         """Test updating job to failed status."""
-        from app.transcription_service import (JobSource, JobStatus,
-                                               TranscriptionService)
+        from app.transcription_service import JobSource, JobStatus, TranscriptionService
         
         session = await TranscriptionService.create_session(source=JobSource.UI)
         job = await TranscriptionService.add_job(
@@ -637,8 +646,7 @@ class TestTranscriptionServiceActiveJobs:
     @pytest.mark.asyncio
     async def test_get_active_jobs(self):
         """Test getting active jobs across all sessions."""
-        from app.transcription_service import (JobSource, JobStatus,
-                                               TranscriptionService)
+        from app.transcription_service import JobSource, JobStatus, TranscriptionService
         
         session = await TranscriptionService.create_session(source=JobSource.UI)
         
@@ -741,6 +749,7 @@ class TestTranscriptionServiceConcurrency:
     async def test_priority_ordering(self):
         """High-priority (Bazarr) waiter is served before normal waiter."""
         import asyncio
+
         from app.transcription_service import PrioritySemaphore
 
         sem = PrioritySemaphore(1)
@@ -792,6 +801,269 @@ class TestTranscriptionServiceConcurrency:
         sem.release()
 
         assert sem._value == 1
+
+
+class TestAudioTranscriptionLifecycle:
+    """Exercise ASR cleanup and candidate forwarding through the public service."""
+
+    @pytest.fixture
+    def audio_pipeline(
+        self,
+        patched_settings: MagicMock,
+        mock_transcription_result: TranscriptionResult,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> Iterator[MagicMock]:
+        """Mock subprocess and Azure boundaries while retaining real file cleanup."""
+        patched_settings.concurrent_transcriptions = 1
+        monkeypatch.setattr(TranscriptionService, "_sessions", {})
+        monkeypatch.setattr(TranscriptionService, "_pipeline_semaphore", None)
+        monkeypatch.setattr(
+            TranscriptionService, "_azure_semaphore", asyncio.Semaphore(1)
+        )
+        transcriber = MagicMock()
+        transcriber.directories = []
+        transcriber.audio_inputs = []
+        transcriber.upload_audio = AsyncMock(
+            return_value=("https://example.com/audio", "test-blob")
+        )
+        transcriber.create_transcription = AsyncMock(
+            return_value=MagicMock(id="azure-job", locale="en-US")
+        )
+        transcriber.get_transcription_status = AsyncMock(
+            return_value=MagicMock(status=MagicMock(value="Succeeded"), locale="en-US")
+        )
+        transcriber.get_transcription_result = AsyncMock(
+            return_value=mock_transcription_result
+        )
+        transcriber.delete_transcription = AsyncMock(return_value=True)
+        transcriber.delete_blob = AsyncMock(return_value=True)
+        transcriber.close = AsyncMock()
+
+        def make_dir(prefix: str) -> str:
+            directory = tmp_path / f"{prefix}{len(transcriber.directories)}"
+            directory.mkdir()
+            transcriber.directories.append(directory)
+            return str(directory)
+
+        async def spawn(*command: str, **kwargs: object) -> MagicMock:
+            transcriber.audio_inputs.append(
+                await asyncio.to_thread(Path(command[3]).read_bytes)
+            )
+
+            async def communicate() -> tuple[bytes, bytes]:
+                await asyncio.to_thread(Path(command[-1]).write_bytes, b"ogg")
+                return b"", b""
+
+            process = MagicMock(returncode=0)
+            process.communicate = AsyncMock(side_effect=communicate)
+            return process
+
+        with (
+            patch(
+                "app.transcription_service.get_settings", return_value=patched_settings
+            ),
+            patch("app.transcription_service.make_temp_dir", side_effect=make_dir),
+            patch(
+                "app.transcription_service.AzureBatchTranscriber",
+                return_value=transcriber,
+            ),
+            patch(
+                "app.transcription_service.asyncio.create_subprocess_exec",
+                new_callable=AsyncMock,
+                side_effect=spawn,
+            ),
+        ):
+            yield transcriber
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("raw_pcm", [False, True])
+    @pytest.mark.parametrize("candidates", [None, ["en-US", "nl-NL"]])
+    async def test_should_transcribe_and_clean_up_audio_data(
+        self,
+        raw_pcm: bool,
+        candidates: list[str] | None,
+        audio_pipeline: MagicMock,
+        mock_transcription_result: TranscriptionResult,
+    ) -> None:
+        """Normal and language-identification jobs retain the same ASR lifecycle."""
+        audio = b"\x00\x01" * 16
+        result, job = await TranscriptionService.transcribe_audio_data(
+            audio,
+            "en",
+            JobSource.BAZARR,
+            file_name="audio.wav",
+            is_raw_pcm=raw_pcm,
+            candidate_locales=candidates,
+        )
+        assert result == mock_transcription_result
+        assert job.status == JobStatus.COMPLETED
+        if raw_pcm:
+            with wave.open(io.BytesIO(audio_pipeline.audio_inputs[0]), "rb") as wav:
+                assert (
+                    wav.getnchannels(),
+                    wav.getsampwidth(),
+                    wav.getframerate(),
+                    wav.readframes(wav.getnframes()),
+                ) == (1, 2, 16000, audio)
+        else:
+            assert audio_pipeline.audio_inputs[0] == audio
+        audio_pipeline.create_transcription.assert_awaited_once_with(
+            audio_url="https://example.com/audio",
+            locale="en-US",
+            display_name="bazarr-audio",
+            candidate_locales=candidates,
+        )
+        audio_pipeline.delete_transcription.assert_awaited_once_with("azure-job")
+        audio_pipeline.delete_blob.assert_awaited_once_with("test-blob")
+        audio_pipeline.close.assert_awaited_once_with()
+        assert not await asyncio.to_thread(audio_pipeline.directories[0].exists)
+
+    @pytest.mark.asyncio
+    async def test_should_cancel_queued_job_without_leaking_directory_or_slot(
+        self, audio_pipeline: MagicMock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A disconnected queued ASR job is cancelled and never releases an unowned slot."""
+        semaphore = PrioritySemaphore(1)
+        await semaphore.acquire()
+        monkeypatch.setattr(TranscriptionService, "_pipeline_semaphore", semaphore)
+        queued = asyncio.Event()
+        add_job = TranscriptionService.add_job
+
+        async def record_job(
+            session_id: str, file_path: str, language: str, source: JobSource
+        ) -> TranscriptionJob:
+            job = await add_job(session_id, file_path, language, source)
+            queued.set()
+            return job
+
+        with patch.object(TranscriptionService, "add_job", side_effect=record_job):
+            task = asyncio.create_task(
+                TranscriptionService.transcribe_audio_data(
+                    b"\x00\x01", "en", JobSource.BAZARR
+                )
+            )
+            await asyncio.wait_for(queued.wait(), timeout=2)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        session = next(iter(TranscriptionService.get_all_sessions().values()))
+        assert next(iter(session.jobs.values())).status == JobStatus.CANCELLED
+        assert not await asyncio.to_thread(audio_pipeline.directories[0].exists)
+        audio_pipeline.upload_audio.assert_not_awaited()
+        semaphore.release()
+        _, subsequent_job = await asyncio.wait_for(
+            TranscriptionService.transcribe_audio_data(
+                b"\x00\x01", "en", JobSource.BAZARR
+            ),
+            timeout=2,
+        )
+        assert subsequent_job.status == JobStatus.COMPLETED
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("cleanup_method", ["delete_transcription", "delete_blob"])
+    async def test_should_release_capacity_when_cleanup_is_cancelled(
+        self, cleanup_method: str, audio_pipeline: MagicMock
+    ) -> None:
+        """Cancellation during cleanup cannot leak the Azure quota slot or client."""
+        cleaning = asyncio.Event()
+
+        async def pending_cleanup(resource_id: str) -> None:
+            cleaning.set()
+            await asyncio.Event().wait()
+
+        cleanup = getattr(audio_pipeline, cleanup_method)
+        cleanup.side_effect = pending_cleanup
+        task = asyncio.create_task(
+            TranscriptionService.transcribe_audio_data(
+                b"\x00\x01", "en", JobSource.BAZARR
+            )
+        )
+        await asyncio.wait_for(cleaning.wait(), timeout=2)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        session = next(iter(TranscriptionService.get_all_sessions().values()))
+        assert next(iter(session.jobs.values())).status == JobStatus.COMPLETED
+        audio_pipeline.close.assert_awaited_once_with()
+        assert not await asyncio.to_thread(audio_pipeline.directories[0].exists)
+        cleanup.side_effect = None
+        _, subsequent_job = await asyncio.wait_for(
+            TranscriptionService.transcribe_audio_data(
+                b"\x00\x01", "en", JobSource.BAZARR
+            ),
+            timeout=2,
+        )
+        assert subsequent_job.status == JobStatus.COMPLETED
+
+    @pytest.mark.asyncio
+    async def test_should_kill_conversion_when_request_is_cancelled(
+        self, audio_pipeline: MagicMock
+    ) -> None:
+        """Cancelled compression stops FFmpeg before deleting temporary audio."""
+        converting = asyncio.Event()
+        process = MagicMock(returncode=None)
+
+        async def communicate() -> None:
+            converting.set()
+            await asyncio.Event().wait()
+
+        process.communicate = AsyncMock(side_effect=communicate)
+        process.wait = AsyncMock(return_value=-9)
+        with patch(
+            "app.transcription_service.asyncio.create_subprocess_exec",
+            new_callable=AsyncMock,
+            return_value=process,
+        ):
+            task = asyncio.create_task(
+                TranscriptionService.transcribe_audio_data(
+                    b"\x00\x01", "en", JobSource.BAZARR
+                )
+            )
+            await asyncio.wait_for(converting.wait(), timeout=2)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        process.kill.assert_called_once_with()
+        process.wait.assert_awaited_once_with()
+        audio_pipeline.upload_audio.assert_not_awaited()
+        assert not await asyncio.to_thread(audio_pipeline.directories[0].exists)
+
+    @pytest.mark.asyncio
+    async def test_should_clean_azure_resources_when_pending_request_is_cancelled(
+        self, audio_pipeline: MagicMock
+    ) -> None:
+        """Cancellation during polling deletes known Azure resources and preserves capacity."""
+        polling = asyncio.Event()
+
+        async def pending_status(job_id: str) -> None:
+            polling.set()
+            await asyncio.Event().wait()
+
+        audio_pipeline.get_transcription_status.side_effect = pending_status
+        task = asyncio.create_task(
+            TranscriptionService.transcribe_audio_data(
+                b"\x00\x01", "en", JobSource.BAZARR
+            )
+        )
+        await asyncio.wait_for(polling.wait(), timeout=2)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        session = next(iter(TranscriptionService.get_all_sessions().values()))
+        assert next(iter(session.jobs.values())).status == JobStatus.CANCELLED
+        audio_pipeline.delete_transcription.assert_awaited_once_with("azure-job")
+        audio_pipeline.delete_blob.assert_awaited_once_with("test-blob")
+        audio_pipeline.close.assert_awaited_once_with()
+        assert not await asyncio.to_thread(audio_pipeline.directories[0].exists)
+        audio_pipeline.get_transcription_status.side_effect = None
+        _, subsequent_job = await asyncio.wait_for(
+            TranscriptionService.transcribe_audio_data(
+                b"\x00\x01", "en", JobSource.BAZARR
+            ),
+            timeout=2,
+        )
+        assert subsequent_job.status == JobStatus.COMPLETED
 
 
 if __name__ == "__main__":
