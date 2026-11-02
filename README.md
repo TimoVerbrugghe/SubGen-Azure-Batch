@@ -113,28 +113,6 @@ In the plugin, choose **Add Generic Destination**, enable **Send All Properties*
 
 Webhook IDs identify individual movies/episodes. For batches and jobs originating on another server, SubGen builds a paginated, session-scoped index of exact media paths, including alternate media-source paths. It refreshes **each episode**, even when episodes share a season folder. Titles/filenames are not used to guess IDs; missing and ambiguous matches are reported.
 
-### Refresh behavior and path mapping
-
-All configured media servers are contacted independently after each successful video subtitle save. Tokens are sent in HTTP headers. Refresh options do not request metadata/image replacement, and no full-library scan is used as a fallback. Failed, cancelled, response-only `/asr`, and audio/LRC jobs do not trigger refresh. Bazarr saves `/asr` responses itself, so its refresh must be handled after Bazarr's save rather than prematurely by SubGen.
-
-The UI displays per-server `queued`, `not_found`, or `failed` outcomes, including mixed success/failure. A queued request is **not** confirmation that the server has indexed the subtitle; clients may need to reopen the subtitle selector. Refresh failures never make a completed transcription fail. Requests use 30-second timeouts and at most three attempts for connection failures or transient HTTP responses; invalid credentials are not retried.
-
-The header and compact-screen status menu also show **Plex/Jellyfin connection badges**: green **Connected**, grey **No API key**, or red **Connection failed** when a key is provided but authentication/connectivity fails (including a missing server URL). On page load, `/api/status` verifies environment credentials using authenticated, read-only requests (`GET /library/sections` for Plex and `GET /System/Info` for Jellyfin). Each check has a 10-second timeout; hover for failure details. A red badge alone does not prove the key is wrong: the server may be unreachable or permissions insufficient. For these media-server status fields, `configured` indicates that a nonblank key is provided. Checks do not trigger scans, expose tokens, or require Azure configuration. Connected confirms read access, not that a particular subtitle has been indexed or that every refresh operation is authorized. Reload the page to recheck after changing configuration/restarting the service.
-
-If container mounts differ, set each server's mapping from the **SubGen-visible** root to the **server-visible** root:
-
-```dotenv
-# SubGen sees /media/tv/Show/episode.mkv
-PLEX_PATH_MAPPING_FROM=/media
-PLEX_PATH_MAPPING_TO=/data
-JELLYFIN_PATH_MAPPING_FROM=/media
-JELLYFIN_PATH_MAPPING_TO=/mnt/library
-```
-
-Set both values or neither. Mappings match directory boundaries, not arbitrary string prefixes, and support POSIX and Windows server paths. The same per-server mapping is reversed for incoming webhooks, while the original server path is retained for refresh. The legacy `USE_PATH_MAPPING` / `PATH_MAPPING_FROM` / `PATH_MAPPING_TO` configuration still works: it maps server -> SubGen on input and is reversed for refresh when no per-server mapping is set. Both servers must be able to read the generated subtitle beside the same underlying media file.
-
-Library/path indexes are reused within a transcription session, but refresh requests are repeated after later subtitle writes: an earlier directory scan cannot be assumed to discover subtitles written afterwards.
-
 ## Emby
 
 Configure an Emby webhook at `http://subgen:9000/webhook/emby` with a JSON payload containing `Event` and `Item` (`Id`, `Type`, `Path`). Supported events are `library.new` and `playback.start`, controlled by `PROCESS_ADDED_MEDIA` and `PROCESS_MEDIA_ON_PLAY`.
