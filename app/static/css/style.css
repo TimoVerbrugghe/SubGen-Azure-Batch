@@ -555,8 +555,10 @@ body {
 
 .session-header {
     display: flex;
+    flex-wrap: wrap;
     justify-content: space-between;
     align-items: center;
+    gap: 8px;
     margin-bottom: 8px;
 }
 
@@ -564,8 +566,21 @@ body {
     font-weight: 600;
     font-size: 0.9rem;
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: 8px;
+    min-width: 0;
+}
+
+.session-language {
+    font-size: 0.75rem;
+    font-weight: 400;
+    padding: 2px 8px;
+    border-radius: 4px;
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+    max-width: 100%;
+    overflow-wrap: anywhere;
 }
 
 .session-source {

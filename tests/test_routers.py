@@ -205,6 +205,98 @@ class TestBatchRouter:
         """Create test client."""
         from app.main import app
         return TestClient(app)
+
+    @pytest.mark.parametrize(
+        "endpoint",
+        [
+            "sessions",
+            "session/language-session",
+            "job/language-session/language-job",
+        ],
+    )
+    @pytest.mark.parametrize(
+        "source,language,language_name",
+        [
+            ("ui", "nl", "Dutch"),
+            ("bazarr", "dut", "Dutch"),
+            ("bazarr", "en-AU", "English"),
+            ("webhook", "de", "German"),
+            ("api", "fr-FR", "French"),
+            ("bazarr", "", None),
+            ("bazarr", "unknown-language", None),
+        ],
+    )
+    def test_should_include_transcription_language_in_job_and_session_responses(
+        self,
+        app_client: TestClient,
+        mock_settings: MagicMock,
+        patched_settings: MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
+        endpoint: str,
+        source: str,
+        language: str,
+        language_name: str | None,
+    ) -> None:
+        """Preserve requested language metadata for jobs from every source."""
+        from app.transcription_service import (
+            JobSource,
+            TranscriptionJob,
+            TranscriptionService,
+            TranscriptionSession,
+        )
+
+        job_source = JobSource(source)
+        job = TranscriptionJob(
+            id="language-job",
+            file_path="/media/episode.mkv",
+            language=language,
+            source=job_source,
+        )
+        session = TranscriptionSession(
+            id="language-session", source=job_source, jobs={job.id: job}
+        )
+        monkeypatch.setattr(TranscriptionService, "_sessions", {session.id: session})
+
+        response = app_client.get(f"/api/batch/{endpoint}")
+
+        assert response.status_code == 200
+        data = response.json()
+        if endpoint == "sessions":
+            data = data["sessions"][0]["jobs"][0]
+        elif endpoint.startswith("session/"):
+            data = data["jobs"][0]
+        assert (data["language"], data["language_name"]) == (language, language_name)
+
+    def test_should_return_chosen_language_when_submitting_ui_batch(
+        self,
+        app_client: TestClient,
+        mock_settings: MagicMock,
+        patched_settings: MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
+        temp_video_file: str,
+    ) -> None:
+        """Include language metadata before the first session status poll."""
+        from app.routers import batch
+        from app.transcription_service import TranscriptionService
+
+        monkeypatch.setattr(TranscriptionService, "_sessions", {})
+        monkeypatch.setattr(batch, "_batch_metadata", {})
+        with (
+            patch.object(batch, "get_settings", return_value=mock_settings),
+            patch.object(batch, "process_batch_session", new=AsyncMock()),
+        ):
+            response = app_client.post(
+                "/api/batch/submit",
+                json={
+                    "files": [temp_video_file],
+                    "language": "en-AU",
+                    "skip_if_exists": False,
+                },
+            )
+
+        assert response.status_code == 200
+        job = response.json()["jobs"][0]
+        assert (job["language"], job["language_name"]) == ("en-AU", "English")
     
     def test_list_sessions_empty(self, client):
         """Test listing sessions when none exist."""

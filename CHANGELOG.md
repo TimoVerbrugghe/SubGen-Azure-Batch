@@ -17,6 +17,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- Session headers display transcription language names and codes for Web UI, Bazarr, webhook, and API batches, including multi-language batches.
 - Batch notifications identify the batch, languages, and shows/seasons or movies, with bounded media and failed-file summaries.
 - Per-server Plex/Jellyfin/Emby path mappings, exact-path Jellyfin item resolution, bounded refresh retries, and per-job queued/failure outcomes in the UI.
 - Desktop and compact-screen Plex/Jellyfin connection badges backed by authenticated, read-only API checks using the configured environment credentials.

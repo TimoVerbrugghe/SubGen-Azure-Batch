@@ -56,7 +56,7 @@ Key benefits of SubGen-Azure-Batch:
 
 **New features in SubGen-Azure-Batch:**
 
-- Web UI for browsing media and submitting batch transcription jobs
+- Web UI for browsing media, submitting batch transcription jobs, and displaying each session's transcription languages
 - Azure Speech Services integration with blob storage
 - Pushover notifications for per-file failures and batch completion summaries
 - Bazarr integration - automatically notifies Bazarr when subtitles are generated
@@ -85,6 +85,8 @@ Open [http://localhost:9000](http://localhost:9000) to:
 - Browse your media files
 - Submit batch transcription jobs
 - Monitor transcription progress
+
+Each session header shows its transcription language (for example, `Dutch (nl)`), using the language recorded on its jobs whether they came from the Web UI, Bazarr, webhooks, or the API. Multi-language batches show each distinct language; an unspecified language is labelled `Default`.
 
 ## Bazarr
 
@@ -398,13 +400,17 @@ network or add authentication at the ingress for those routes.
 | `POST /webhook/emby` | Emby generation webhook |
 | `POST /webhook/tautulli` | Tautulli generation webhook |
 | `POST /api/batch/submit` | Submit batch transcription via API |
-| `GET /api/batch/sessions/{id}` | Get session status |
+| `GET /api/batch/sessions` | List sessions with job details |
+| `GET /api/batch/session/{id}` | Get session status |
+| `GET /api/batch/job/{session_id}/{job_id}` | Get job status |
 | `POST /api/agent/batches` | Submit a secured agent batch (requires `X-API-Key`) |
 | `GET /api/agent/batches` | List active secured agent batches |
 | `GET /api/agent/batches/{id}` | Get secured batch counts and per-file stages |
 | `POST /api/agent/batches/{id}/cancel` | Cancel a secured agent batch |
 | `POST /mcp` | MCP Streamable HTTP server (requires `X-API-Key`) |
 | `GET /docs` | OpenAPI/Swagger documentation |
+
+Batch submission, session listing, and session/job status responses include each job's `language` code and `language_name` (`null` when the name is unknown).
 
 ## Supported Languages
 
