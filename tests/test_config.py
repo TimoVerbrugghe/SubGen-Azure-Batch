@@ -189,7 +189,55 @@ class TestEmbyConfig:
 
 class TestPathMappingConfig:
     """Test PathMappingConfig dataclass."""
-    
+
+    @pytest.mark.parametrize(
+        ("path", "expected"),
+        [
+            ("/tv/Show/ep.mkv", "/Volumes/TV/Show/ep.mkv"),
+            ("/tv-backup/ep.mkv", "/tv-backup/ep.mkv"),
+            ("/movies/tv/ep.mkv", "/movies/tv/ep.mkv"),
+            ("/tv/Show/tv/ep.mkv", "/Volumes/TV/Show/tv/ep.mkv"),
+        ],
+    )
+    def test_should_map_only_root_directory_components(
+        self, path, expected, mock_settings
+    ):
+        from app.config import PathMappingConfig
+
+        mapping = PathMappingConfig(
+            enabled=True, from_path="/tv", to_path="/Volumes/TV"
+        )
+        assert mapping.apply(path) == expected
+
+    def test_should_reject_incomplete_enabled_mapping(self, mock_settings):
+        from app.config import PathMappingConfig
+
+        with pytest.raises(
+            ValueError, match="Path mapping requires both FROM and TO paths"
+        ):
+            PathMappingConfig(enabled=True, from_path="/tv").apply("/tv/episode.mkv")
+
+    @pytest.mark.parametrize(
+        ("source", "target", "path", "expected"),
+        [
+            ("/media", r"D:\Library", "/media/Show/ep.mkv", r"D:\Library\Show\ep.mkv"),
+            (r"D:\Library", "/media", r"d:\library\Show\ep.mkv", "/media/Show/ep.mkv"),
+            (
+                r"\\nas\Library",
+                "/media",
+                r"\\nas\Library\Show\ep.mkv",
+                "/media/Show/ep.mkv",
+            ),
+        ],
+    )
+    def test_should_translate_windows_and_posix_server_paths(
+        self, source, target, path, expected, mock_settings
+    ):
+        from app.config import PathMappingConfig
+
+        mapping = PathMappingConfig(enabled=True, from_path=source, to_path=target)
+        assert mapping.apply(path) == expected
+
     def test_apply_when_enabled(self):
         """Test path mapping is applied when enabled."""
         from app.config import PathMappingConfig
@@ -295,6 +343,27 @@ class TestFormatDuration:
 
 class TestSettingsSingleton:
     """Test Settings singleton behavior."""
+
+    def test_should_load_independent_server_path_mappings(self, mock_settings):
+        from app.config import Settings
+
+        with patch(
+            "app.config.os.getenv",
+            side_effect=lambda key, default=None: {
+                "PLEX_PATH_MAPPING_FROM": "/media",
+                "PLEX_PATH_MAPPING_TO": "/plex",
+                "JELLYFIN_PATH_MAPPING_FROM": "/media",
+                "JELLYFIN_PATH_MAPPING_TO": "/jellyfin",
+                "EMBY_PATH_MAPPING_FROM": "/media",
+                "EMBY_PATH_MAPPING_TO": "/emby",
+            }.get(key, default),
+        ):
+            settings = Settings.from_env()
+        assert settings.plex.path_mapping.apply("/media/ep.mkv") == "/plex/ep.mkv"
+        assert (
+            settings.jellyfin.path_mapping.apply("/media/ep.mkv") == "/jellyfin/ep.mkv"
+        )
+        assert settings.emby.path_mapping.apply("/media/ep.mkv") == "/emby/ep.mkv"
 
     @pytest.mark.parametrize("value", [None, "", "   "])
     def test_should_accept_any_mcp_host_when_allowlist_is_unset_or_blank(

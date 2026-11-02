@@ -26,6 +26,28 @@
 - Language codes must be full Azure locales (`en-US`, `de-DE`) — convert from ISO 639-1 via `language_code.get_azure_locale()`
 - Language identification supports max 4 candidate locales
 
+## Media-server Refresh Behavior and Path Mapping
+
+- Contact all configured media servers independently after each successful video subtitle save through `TranscriptionService`. Send tokens only in HTTP headers. Do not request metadata/image replacement or fall back to full-library scans.
+- Do not refresh failed, cancelled, response-only `/asr`, or audio/LRC jobs. Bazarr saves `/asr` responses itself; refresh must happen after Bazarr's save, not prematurely in SubGen.
+- Preserve per-server `queued`, `not_found`, and `failed` outcomes, including mixed success/failure. Queued means accepted, not that subtitle indexing has completed; refresh failures must not fail completed transcriptions.
+- Refresh requests use 30-second timeouts and at most three attempts for connection failures or transient HTTP responses. Do not retry invalid credentials.
+- Reuse library/path indexes within a transcription session, but repeat refresh requests after later subtitle writes: an earlier directory scan cannot discover subtitles written afterwards.
+- Map each server's **SubGen-visible** root to its **server-visible** root. Set both mapping values or neither; match directory boundaries, not arbitrary string prefixes, and support POSIX and Windows server paths.
+
+```dotenv
+# SubGen sees /media/tv/Show/episode.mkv
+PLEX_PATH_MAPPING_FROM=/media
+PLEX_PATH_MAPPING_TO=/data
+JELLYFIN_PATH_MAPPING_FROM=/media
+JELLYFIN_PATH_MAPPING_TO=/mnt/library
+```
+
+- Reverse per-server mappings for incoming webhooks and retain original server paths for refresh. The legacy `USE_PATH_MAPPING` / `PATH_MAPPING_FROM` / `PATH_MAPPING_TO` maps server -> SubGen on input and is reversed for refresh when no per-server mapping is set. Both servers must read the generated subtitle beside the same underlying media file.
+- Keep desktop and compact-screen Plex/Jellyfin badges consistent: green **Connected**, grey **No API key**, red **Connection failed** for a supplied key whose authentication/connectivity fails, including a missing server URL. Red does not necessarily mean an invalid key; connectivity and permissions can also fail.
+- On page load, `/api/status` checks environment credentials with authenticated, read-only `GET /library/sections` for Plex and `GET /System/Info` for Jellyfin, using 10-second timeouts. Media-server `configured` means a nonblank key is supplied. Checks must not trigger scans, expose tokens, or require Azure configuration.
+- Connected confirms read access, not subtitle indexing or authorization for every refresh operation. Keep failure details in badge tooltips; reload the page to recheck after configuration changes/restarts. Clients may need to reopen the subtitle selector after a queued refresh.
+
 ## Testing Conventions
 
 - One test file per app module: `tests/test_<module_name>.py`

@@ -10,9 +10,232 @@ Tests cover:
 
 import asyncio
 from datetime import datetime
+from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
+
+@pytest.fixture
+def file_pipeline(
+    mock_settings, patched_settings, mock_transcription_result, tmp_path, monkeypatch
+):
+    """Isolate service state and mock external transcription/refresh boundaries."""
+    import app.transcription_service as service
+    from app.utils.media_server_client import MediaRefreshResult
+
+    mock_settings.max_concurrent_uploads = 2
+    mock_settings.job_poll_interval = 1
+    mock_settings.transcription_timeout = 10
+    transcriber = MagicMock()
+    transcriber.upload_audio = AsyncMock(
+        return_value=("https://storage.invalid/audio", "blob")
+    )
+    azure_job = SimpleNamespace(
+        id="azure-job", locale="en-US", status=SimpleNamespace(value="Succeeded")
+    )
+    transcriber.create_transcription = AsyncMock(return_value=azure_job)
+    transcriber.get_transcription_status = AsyncMock(return_value=azure_job)
+    transcriber.get_transcription_result = AsyncMock(
+        return_value=mock_transcription_result
+    )
+    transcriber.delete_transcription = AsyncMock()
+    transcriber.delete_blob = AsyncMock()
+    transcriber.close = AsyncMock()
+    audio = tmp_path / "extracted.ogg"
+    audio.write_bytes(b"audio")
+    extractor = AsyncMock(return_value=str(audio))
+    refresher = MagicMock()
+    refresher.refresh = AsyncMock(
+        return_value={
+            "plex": MediaRefreshResult("queued"),
+            "jellyfin": MediaRefreshResult("failed", "HTTP 401"),
+        }
+    )
+    monkeypatch.setattr(service.TranscriptionService, "_sessions", {})
+    monkeypatch.setattr(service.TranscriptionService, "_lock", asyncio.Lock())
+    for name in ("_pipeline_semaphore", "_upload_semaphore", "_azure_semaphore"):
+        monkeypatch.setattr(service.TranscriptionService, name, None)
+    with (
+        patch.object(service, "get_settings", return_value=mock_settings),
+        patch.object(service, "extract_audio", new=extractor),
+        patch.object(service, "AzureBatchTranscriber", return_value=transcriber),
+        patch.object(
+            service, "MediaServerRefresher", return_value=refresher
+        ) as refresh_factory,
+    ):
+        yield service, transcriber, refresher, refresh_factory, extractor
+
+
+class TestPostSaveRefresh:
+    """Verify refresh timing and independent outcomes through the public service."""
+
+    @pytest.mark.asyncio
+    async def test_should_refresh_only_after_subtitle_is_persisted_and_keep_completed_status(
+        self, file_pipeline, tmp_path
+    ):
+        from app.utils.media_server_client import (
+            MediaRefreshContext,
+            MediaRefreshResult,
+        )
+
+        service, transcriber, refresher, factory, extractor = file_pipeline
+        media_path = str(tmp_path / "episode.mkv")
+        context = MediaRefreshContext(item_ids={"plex": "123"})
+        session = await service.TranscriptionService.create_session()
+
+        async def confirm_saved(path, carried_context):
+            jobs = list(session.jobs.values())
+            job = jobs[0]
+            assert path == media_path
+            assert carried_context is context
+            assert Path(job.srt_path).read_text().startswith("1\n")
+            transcriber.close.assert_awaited_once()
+            return {
+                "plex": MediaRefreshResult("queued"),
+                "jellyfin": MediaRefreshResult("failed", "HTTP 401"),
+            }
+
+        refresher.refresh.side_effect = confirm_saved
+        result, job = await service.TranscriptionService.transcribe_file(
+            media_path,
+            "en",
+            session_id=session.id,
+            media_refresh_context=context,
+            source=service.JobSource.WEBHOOK,
+            audio_track=1,
+        )
+        assert result is not None
+        assert job.status == service.JobStatus.COMPLETED
+        assert job.error is None
+        assert job.to_dict()["media_refresh_results"] == {
+            "plex": {"status": "queued", "error": None},
+            "jellyfin": {"status": "failed", "error": "HTTP 401"},
+        }
+        assert job.media_refresh_status == {"plex": True, "jellyfin": False}
+        extractor.assert_awaited_once_with(
+            media_path, output_format="ogg", audio_track=1
+        )
+        factory.assert_called_once_with()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "scenario",
+        [
+            "response_only",
+            "audio",
+            "save_failure",
+            "cancelled",
+            "transcription_failure",
+        ],
+    )
+    async def test_should_not_refresh_without_a_successfully_saved_video_subtitle(
+        self, scenario, file_pipeline, tmp_path
+    ):
+        service, transcriber, refresher, factory, _ = file_pipeline
+        path = str(tmp_path / ("audio.mp3" if scenario == "audio" else "movie.mkv"))
+        session = await service.TranscriptionService.create_session()
+        if scenario == "transcription_failure":
+            transcriber.create_transcription.side_effect = RuntimeError(
+                "transcription unavailable"
+            )
+        if scenario == "cancelled":
+
+            async def cancel_before_save(*args, **kwargs):
+                await service.TranscriptionService.cancel_session(session.id)
+                return MagicMock()
+
+            transcriber.get_transcription_result.side_effect = cancel_before_save
+
+        with patch(
+            "app.utils.subtitle_utils.save_srt",
+            side_effect=OSError("subtitle write failed")
+            if scenario == "save_failure"
+            else None,
+        ) as save:
+            if scenario in ("save_failure", "transcription_failure"):
+                with pytest.raises(
+                    OSError if scenario == "save_failure" else RuntimeError,
+                    match="subtitle write failed"
+                    if scenario == "save_failure"
+                    else "transcription unavailable",
+                ):
+                    await service.TranscriptionService.transcribe_file(
+                        path, "en", session_id=session.id
+                    )
+                assert (
+                    next(iter(session.jobs.values())).status == service.JobStatus.FAILED
+                )
+            else:
+                result, job = await service.TranscriptionService.transcribe_file(
+                    path,
+                    "en",
+                    session_id=session.id,
+                    save_srt=scenario != "response_only",
+                )
+                if scenario == "audio":
+                    assert job.srt_path.endswith(".lrc")
+                    assert Path(job.srt_path).exists()
+                elif scenario == "cancelled":
+                    assert result is None
+                    assert job.status == service.JobStatus.CANCELLED
+                else:
+                    assert job.srt_path is None
+                save.assert_not_called()
+        refresher.refresh.assert_not_awaited()
+        factory.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_should_reuse_session_refresher_for_each_saved_episode(
+        self, file_pipeline, tmp_path
+    ):
+        service, _, refresher, factory, _ = file_pipeline
+        session = await service.TranscriptionService.create_session()
+        for episode in ("ep1.mkv", "ep2.mkv"):
+            await service.TranscriptionService.transcribe_file(
+                str(tmp_path / episode), "en", session_id=session.id
+            )
+        assert [call.args[0] for call in refresher.refresh.call_args_list] == [
+            str(tmp_path / "ep1.mkv"),
+            str(tmp_path / "ep2.mkv"),
+        ]
+        factory.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_should_process_batch_without_end_of_session_duplicate_refresh(
+        self, file_pipeline, tmp_path, mock_settings, app_client
+    ):
+        from app.routers import batch
+
+        service, _, refresher, factory, _ = file_pipeline
+        mock_settings.bazarr.is_configured = False
+        session = await service.TranscriptionService.create_session()
+        for episode in ("one.mkv", "two.mkv"):
+            await service.TranscriptionService.add_job(
+                session.id, str(tmp_path / episode), "en", service.JobSource.UI
+            )
+        with (
+            patch.object(batch, "get_settings", return_value=mock_settings),
+            patch.object(batch, "notify_batch_completion", new=AsyncMock()),
+            patch.dict(batch._batch_metadata, {}, clear=True),
+        ):
+            await batch.process_batch_session(session.id)
+        assert refresher.refresh.await_count == 2
+        factory.assert_called_once()
+        response = app_client.get(f"/api/batch/session/{session.id}")
+        assert response.status_code == 200
+        assert [job["media_refresh_results"] for job in response.json()["jobs"]] == [
+            {
+                "plex": {"status": "queued", "error": None},
+                "jellyfin": {"status": "failed", "error": "HTTP 401"},
+            },
+        ] * 2
+        first_job = next(iter(session.jobs.values()))
+        response = app_client.get(f"/api/batch/job/{session.id}/{first_job.id}")
+        assert (
+            response.json()["media_refresh_results"] == first_job.media_refresh_results
+        )
 
 
 class TestJobStatus:

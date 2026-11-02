@@ -73,6 +73,38 @@ def _mcp_data(response) -> dict:
 class TestAgentBatchRest:
     """Exercise agent batch submission, status, authorization, and cancellation."""
 
+    def test_should_expose_independent_refresh_outcomes_without_server_credentials(
+        self, agent_client, mock_settings
+    ):
+        media_file = _write_media(MEDIA_ROOT / "refresh.mkv")
+        response = agent_client.post(
+            "/api/agent/batches",
+            headers=_headers(),
+            json={
+                "files": [str(media_file)],
+                "languages": ["en"],
+                "apply_skip_rules": False,
+            },
+        )
+        session_id = response.json()["session_id"]
+        job = next(iter(TranscriptionService.get_session(session_id).jobs.values()))
+        job.status = JobStatus.COMPLETED
+        job.media_refresh_results = {
+            "plex": {"status": "queued", "error": None},
+            "jellyfin": {"status": "failed", "error": "HTTP 401"},
+        }
+        job.media_refresh_status = {"plex": True, "jellyfin": False}
+        response = agent_client.get(
+            f"/api/agent/batches/{session_id}", headers=_headers()
+        )
+        assert response.status_code == 200
+        assert (
+            response.json()["jobs"][0]["media_refresh_results"]
+            == job.media_refresh_results
+        )
+        assert mock_settings.plex.token not in response.text
+        assert mock_settings.jellyfin.token not in response.text
+
     def test_submit_folders_files_languages_and_request_options(self, agent_client):
         nested_file = _write_media(MEDIA_ROOT / "Series" / "Season 1" / "one.mkv")
         _write_media(MEDIA_ROOT / "Series" / "Season 1" / "two.mp3")

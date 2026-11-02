@@ -21,9 +21,10 @@ from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
 from app.config import format_duration, get_settings
-from app.utils.audio_extractor import extract_audio, make_temp_dir
+from app.utils.audio_extractor import extract_audio, is_video_file, make_temp_dir
 from app.utils.azure_batch_transcriber import AzureBatchTranscriber, TranscriptionResult
 from app.utils.language_code import LanguageCode
+from app.utils.media_server_client import MediaRefreshContext, MediaServerRefresher
 
 logger = logging.getLogger(__name__)
 
@@ -132,6 +133,8 @@ class TranscriptionJob:
     media_refresh_status: Optional[Dict[str, bool]] = (
         None  # e.g., {"plex": True, "jellyfin": False}
     )
+    media_refresh_results: dict[str, dict[str, str | None]] | None = None
+    media_refresh_context: MediaRefreshContext = field(default_factory=MediaRefreshContext)
 
     def get_status_text(self) -> str:
         """Get human-readable status text."""
@@ -167,6 +170,7 @@ class TranscriptionJob:
             "segments_count": self.segments_count,
             "duration_seconds": self.duration_seconds,
             "media_refresh_status": self.media_refresh_status,
+            "media_refresh_results": self.media_refresh_results,
         }
 
 
@@ -180,6 +184,7 @@ class TranscriptionSession:
     created_at: datetime = field(default_factory=datetime.now)
     source: JobSource = JobSource.UI
     notify_bazarr: bool = True
+    media_refresher: MediaServerRefresher | None = field(default=None, repr=False)
 
     def to_dict(self) -> dict:
         """Convert session to dictionary for API responses."""
@@ -567,6 +572,8 @@ class TranscriptionService:
         session_id: Optional[str] = None,
         job_id: Optional[str] = None,
         save_srt: bool = True,
+        media_refresh_context: MediaRefreshContext | None = None,
+        audio_track: int = 0,
     ) -> Tuple[Optional[TranscriptionResult], TranscriptionJob]:
         """
         Transcribe a video/audio file - used by batch UI.
@@ -578,13 +585,13 @@ class TranscriptionService:
             session_id: Optional existing session ID.
             job_id: Optional existing job ID (if already added to session).
             save_srt: Whether to save SRT file next to video.
+            media_refresh_context: Optional webhook IDs and original server paths.
+            audio_track: Audio track index selected by the webhook's preferences.
 
         Returns:
             Tuple of (TranscriptionResult, TranscriptionJob).
 
-        Note:
-            Media server refresh is handled by the batch router at session end,
-            not per-job, to avoid spamming the media servers.
+        Media servers are refreshed only after a video subtitle is saved.
         """
         settings = get_settings()
 
@@ -606,13 +613,18 @@ class TranscriptionService:
             # Add new job
             job = await cls.add_job(session.id, file_path, language, source)
 
+        if media_refresh_context is not None:
+            job.media_refresh_context = media_refresh_context
+
         # Acquire pipeline slot before starting work (batch jobs use normal priority=1).
         # Bazarr uses priority=0 (see transcribe_audio_data) so it always goes first.
         await cls._get_pipeline_semaphore().acquire(priority=1)
         try:
             # Extract audio
             await cls.update_job_status(session.id, job.id, JobStatus.EXTRACTING)
-            audio_path = await extract_audio(file_path, output_format="ogg")
+            audio_path = await extract_audio(
+                file_path, output_format="ogg", audio_track=audio_track
+            )
             logger.info(f"[{job.id}] Extracted audio: {audio_path}")
 
             # Convert language
@@ -679,6 +691,8 @@ class TranscriptionService:
 
                     # Save subtitle file if requested
                     output_path = None
+                    if job.status == JobStatus.CANCELLED:
+                        raise TranscriptionCancelledError("Cancelled before subtitle save")
                     if save_srt:
                         from app.utils.audio_extractor import is_audio_file
                         from app.utils.subtitle_utils import save_lrc
@@ -688,18 +702,24 @@ class TranscriptionService:
                             is_audio_file(file_path)
                             and settings.transcription.lrc_for_audio_files
                         ):
-                            output_path = save_lrc(srt_content, file_path, language)
+                            output_path = await asyncio.to_thread(
+                                save_lrc, srt_content, file_path, language
+                            )
                             logger.info(
                                 f"[Session {session.id}] [{job.id}] Saved LRC: {output_path}"
                             )
                         else:
-                            output_path = save_srt_file(srt_content, file_path, language)
+                            output_path = await asyncio.to_thread(
+                                save_srt_file, srt_content, file_path, language
+                            )
                             logger.info(
                                 f"[Session {session.id}] [{job.id}] Saved SRT: {output_path}"
                             )
 
                         job.srt_path = output_path
 
+                    if job.status == JobStatus.CANCELLED:
+                        raise TranscriptionCancelledError("Cancelled during subtitle save")
                     await cls.update_job_status(
                         session.id,
                         job.id,
@@ -707,8 +727,6 @@ class TranscriptionService:
                         segments_count=len(result.segments),
                         srt_path=output_path,
                     )
-
-                    return result, job
 
                 finally:
                     if job.azure_job_id:
@@ -729,9 +747,11 @@ class TranscriptionService:
 
                 # Cleanup audio file
                 try:
-                    Path(audio_path).unlink()
-                except Exception:
-                    pass
+                    await asyncio.to_thread(Path(audio_path).unlink, missing_ok=True)
+                except OSError as exc:
+                    logger.warning(
+                        f"[{job.id}] Failed to delete temporary audio: {exc}"
+                    )
 
         except TranscriptionCancelledError:
             # Job was cancelled - don't mark as failed, just exit silently
@@ -747,6 +767,35 @@ class TranscriptionService:
         finally:
             # Release pipeline slot regardless of outcome
             cls._get_pipeline_semaphore().release()
+
+        if output_path:
+            await cls.refresh_saved_job(session, job)
+        return result, job
+
+    @classmethod
+    async def refresh_saved_job(
+        cls, session: TranscriptionSession, job: TranscriptionJob
+    ) -> None:
+        """Record one refresh outcome for a completed, saved video subtitle."""
+        if (
+            job.status != JobStatus.COMPLETED
+            or not job.srt_path
+            or not is_video_file(job.file_path)
+            or job.media_refresh_results is not None
+        ):
+            logger.debug(f"[{job.id}] No pending post-save video refresh")
+            return
+        if session.media_refresher is None:
+            session.media_refresher = MediaServerRefresher()
+        results = await session.media_refresher.refresh(
+            job.file_path, job.media_refresh_context
+        )
+        job.media_refresh_results = {
+            name: result.to_dict() for name, result in results.items()
+        }
+        job.media_refresh_status = {
+            name: result.status == "queued" for name, result in results.items()
+        }
 
     @classmethod
     async def _wait_for_transcription_with_logging(

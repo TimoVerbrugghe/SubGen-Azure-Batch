@@ -13,10 +13,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Fixed
 
 - Bazarr scan timeouts now report an unconfirmed remote outcome with exception diagnostics instead of claiming the scan failed; batch completion notifications are sent before waiting for scans.
+- Media-server refresh now runs after every saved video subtitle, including every Jellyfin episode in a shared season directory. Webhook jobs use the unified transcription service and release duplicate tracking when skipped.
 
 ### Added
 
 - Batch notifications identify the batch, languages, and shows/seasons or movies, with bounded media and failed-file summaries.
+- Per-server Plex/Jellyfin/Emby path mappings, exact-path Jellyfin item resolution, bounded refresh retries, and per-job queued/failure outcomes in the UI.
+- Desktop and compact-screen Plex/Jellyfin connection badges backed by authenticated, read-only API checks using the configured environment credentials.
 
 - Authenticated REST and MCP interfaces for secure agent-submitted transcription batches
 - Per-batch languages, skip-rule and Bazarr notification options with path validation, detailed progress, and cancellation

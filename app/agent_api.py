@@ -60,6 +60,8 @@ class AgentJobResponse(BaseModel):
     progress: int = 0
     error: str | None = None
     srt_path: str | None = None
+    media_refresh_status: dict[str, bool] | None = None
+    media_refresh_results: dict[str, dict[str, str | None]] | None = None
     created_at: str | None = None
     started_at: str | None = None
     completed_at: str | None = None
@@ -288,6 +290,8 @@ def _job_response(job: TranscriptionJob) -> AgentJobResponse:
         progress=job.progress,
         error=job.error,
         srt_path=job.srt_path,
+        media_refresh_status=job.media_refresh_status,
+        media_refresh_results=job.media_refresh_results,
         created_at=job.created_at.isoformat() if job.created_at else None,
         started_at=job.started_at.isoformat() if job.started_at else None,
         completed_at=job.completed_at.isoformat() if job.completed_at else None,
