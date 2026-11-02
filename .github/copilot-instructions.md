@@ -48,6 +48,18 @@ JELLYFIN_PATH_MAPPING_TO=/mnt/library
 - On page load, `/api/status` checks environment credentials with authenticated, read-only `GET /library/sections` for Plex and `GET /System/Info` for Jellyfin, using 10-second timeouts. Media-server `configured` means a nonblank key is supplied. Checks must not trigger scans, expose tokens, or require Azure configuration.
 - Connected confirms read access, not subtitle indexing or authorization for every refresh operation. Keep failure details in badge tooltips; reload the page to recheck after configuration changes/restarts. Clients may need to reopen the subtitle selector after a queued refresh.
 
+## Bazarr Scan Coordination and Batch Notifications
+
+- Keep Pushover batch completion independent of Bazarr. In `app/routers/batch.py`, attempt the completion summary once after batch jobs finish and before any Bazarr status check or scan. Respect Pushover credentials, `NOTIFY_ON_SUCCESS`, and `NOTIFY_ON_FAILURE`; cancelled batches do not send completion summaries. Bazarr failures must neither suppress Pushover nor fail completed transcriptions.
+- Route all batch and webhook scans through `BazarrClient` in `app/utils/bazarr_client.py`. Targeted `PATCH /api/series` and `PATCH /api/movies` with `action=scan-disk` execute synchronously. Hold the shared per-server, per-event-loop lock until the response completes; client-instance locks do not protect concurrent batches/webhooks.
+- Deduplicate targeted scans per unique series/movie within a batch, but retain subsequent scans after later subtitle writes. An earlier scan cannot discover subtitles written afterwards.
+- Before a scan, read authenticated `GET /api/system/tasks` using the `X-API-KEY` header. Wait up to 300 seconds for any `job_running=true` entry to finish, polling every two seconds with status requests bounded to 30 seconds or the remaining deadline. Unavailable/malformed status or a busy deadline means `NOT_ATTEMPTED` with diagnostics, not successful notification.
+- Bazarr's task-status endpoint tracks scheduled jobs, not targeted API scans. Idle scheduler status cannot prove that a timed-out targeted scan has finished. Keep the server's scan state uncertain after a timeout, connection loss, or in-flight cancellation, and pause subsequent scans until SubGen restarts. Log recovery guidance: verify Bazarr is idle or recover Bazarr before restarting SubGen. A failed read-only preflight must not permanently pause scans.
+- Preserve `CONFIRMED`, `REJECTED`, `UNCONFIRMED`, and `NOT_ATTEMPTED` outcomes. Only confirmed scans count as successful; never retry an uncertain scan. Targeted scan requests use a 300-second total timeout and 30-second connection timeout.
+- Never fall back to asynchronous full-library jobs (`update_series` / `update_movies` via `POST /api/system/tasks`) for unmatched paths or unsuccessful scans. Log skipped unmatched paths and suggest a manual Bazarr scan instead.
+- Coordination is local to one SubGen process/event loop and server URL. Manual scans, other integrations, multiple processes, and scheduled jobs starting after preflight can still overlap; do not claim this guarantees freedom from SQLite locks.
+- Preserve public-interface tests in `tests/test_bazarr_client.py` for cross-client serialization, later writes, busy/unusable status, uncertain outcomes, cancellation, and server isolation. Keep `tests/test_routers.py` coverage proving completion notification precedes scans and unmatched paths never launch full-library jobs.
+
 ## Testing Conventions
 
 - One test file per app module: `tests/test_<module_name>.py`

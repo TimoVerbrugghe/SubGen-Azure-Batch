@@ -181,7 +181,7 @@ async def _notify_bazarr_for_completed_jobs(session_id: str, session: Transcript
     2. Looks up unique series/movie IDs by path
     3. Triggers targeted scans for each unique series/movie
     
-    Falls back to full disk scan if no specific items found.
+    Skips notification if no specific items are found; never starts library-wide jobs.
     """
     from app.utils.audio_extractor import is_audio_file
     
@@ -256,20 +256,10 @@ async def _notify_bazarr_for_completed_jobs(session_id: str, session: Transcript
                 f"{len(scanned_movies)} movies"
             )
         elif not attempted_series and not attempted_movies:
-            # Fallback to full scan if no specific items found
-            # (e.g., files not in Bazarr's library yet)
-            logger.info(f"[{session_id}] No matching Bazarr items found, triggering full scan")
-            outcome = await bazarr.trigger_disk_scan_outcome()
-            if outcome is BazarrScanOutcome.UNCONFIRMED:
-                logger.warning(
-                    f"[{session_id}] Bazarr: Full scan outcome unconfirmed; "
-                    "Bazarr may still be scanning"
-                )
-            elif outcome is not BazarrScanOutcome.CONFIRMED:
-                logger.warning(
-                    f"[{session_id}] Bazarr: Full scan not confirmed "
-                    f"(outcome: {outcome.value})"
-                )
+            logger.warning(
+                f"[{session_id}] No matching Bazarr items found; notification skipped. "
+                "Run a manual scan in Bazarr if needed"
+            )
             
     except Exception as e:
         logger.warning(f"[{session_id}] Failed to notify Bazarr: {e}")

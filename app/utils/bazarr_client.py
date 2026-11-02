@@ -8,8 +8,10 @@ and notifying about new subtitles.
 import asyncio
 import logging
 import time
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Dict, Optional, Union
+from weakref import WeakKeyDictionary
 
 import aiohttp
 
@@ -19,6 +21,20 @@ logger = logging.getLogger(__name__)
 
 BAZARR_SCAN_TIMEOUT_SECONDS = 300
 BAZARR_SCAN_CONNECT_TIMEOUT_SECONDS = 30
+BAZARR_SCAN_POLL_SECONDS = 2
+
+
+@dataclass
+class _ScanState:
+    """Coordinate all clients using the same Bazarr server in this process."""
+
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    uncertain: bool = False
+
+
+_scan_states: WeakKeyDictionary[
+    asyncio.AbstractEventLoop, dict[str, _ScanState]
+] = WeakKeyDictionary()
 
 
 class BazarrScanOutcome(str, Enum):
@@ -103,7 +119,7 @@ class BazarrClient:
         that will detect newly added external subtitles.
         
         Args:
-            series_id: Sonarr series ID. If None, triggers full series indexing.
+            series_id: Sonarr series ID. If None, no scan is attempted.
             
         Returns:
             True if successful.
@@ -124,17 +140,11 @@ class BazarrClient:
             return await self._trigger_scan(
                 operation="series",
                 target=f"series {series_id}",
-                method="patch",
                 url=f"{self.url}/api/series",
                 params={"seriesid": series_id, "action": "scan-disk"},
             )
-        return await self._trigger_scan(
-            operation="series",
-            target="full series update",
-            method="post",
-            url=f"{self.url}/api/system/tasks",
-            params={"taskid": "update_series"},
-        )
+        logger.warning("Bazarr series scan skipped: a targeted series ID is required")
+        return BazarrScanOutcome.NOT_ATTEMPTED
     
     async def trigger_movie_scan(self, movie_id: Optional[int] = None) -> bool:
         """
@@ -144,7 +154,7 @@ class BazarrClient:
         that will detect newly added external subtitles.
         
         Args:
-            movie_id: Radarr movie ID. If None, triggers full movie indexing.
+            movie_id: Radarr movie ID. If None, no scan is attempted.
             
         Returns:
             True if successful.
@@ -165,23 +175,99 @@ class BazarrClient:
             return await self._trigger_scan(
                 operation="movie",
                 target=f"movie {movie_id}",
-                method="patch",
                 url=f"{self.url}/api/movies",
                 params={"radarrid": movie_id, "action": "scan-disk"},
             )
-        return await self._trigger_scan(
-            operation="movie",
-            target="full movie update",
-            method="post",
-            url=f"{self.url}/api/system/tasks",
-            params={"taskid": "update_movies"},
-        )
+        logger.warning("Bazarr movie scan skipped: a targeted movie ID is required")
+        return BazarrScanOutcome.NOT_ATTEMPTED
+
+    async def _wait_for_idle(self) -> bool:
+        """Wait for scheduled jobs; do not scan when their status is unavailable."""
+        session = await self._get_session()
+        deadline = time.monotonic() + BAZARR_SCAN_TIMEOUT_SECONDS
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                logger.warning("Bazarr scan skipped: scheduled jobs are still running")
+                return False
+            async with session.get(
+                f"{self.url}/api/system/tasks",
+                headers=self.headers,
+                timeout=aiohttp.ClientTimeout(
+                    total=min(BAZARR_SCAN_CONNECT_TIMEOUT_SECONDS, remaining)
+                ),
+            ) as response:
+                if response.status != 200:
+                    logger.warning(
+                        "Bazarr scan skipped: task status unavailable (HTTP %s)",
+                        response.status,
+                    )
+                    return False
+                payload = await response.json()
+            tasks = payload.get("data") if isinstance(payload, dict) else None
+            if not isinstance(tasks, list) or any(
+                not isinstance(task, dict)
+                or not isinstance(task.get("job_running"), bool)
+                for task in tasks
+            ):
+                logger.warning("Bazarr scan skipped: invalid task-status response")
+                return False
+            if not any(task["job_running"] for task in tasks):
+                return True
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                logger.warning("Bazarr scan skipped: scheduled jobs are still running")
+                return False
+            logger.info("Waiting for Bazarr scheduled jobs before scanning subtitles")
+            await asyncio.sleep(min(BAZARR_SCAN_POLL_SECONDS, remaining))
 
     async def _trigger_scan(
         self,
         operation: str,
         target: str,
-        method: str,
+        url: str,
+        params: Dict[str, Union[int, str]],
+    ) -> BazarrScanOutcome:
+        """Serialize targeted scans across batches and webhook clients."""
+        states = _scan_states.setdefault(asyncio.get_running_loop(), {})
+        state = states.setdefault(self.url, _ScanState())
+        async with state.lock:
+            if state.uncertain:
+                logger.warning(
+                    "Bazarr scan skipped for %s: an earlier scan may still be running; "
+                    "verify Bazarr is idle, then restart SubGen to resume notifications",
+                    target,
+                )
+                return BazarrScanOutcome.NOT_ATTEMPTED
+            try:
+                if not await self._wait_for_idle():
+                    return BazarrScanOutcome.NOT_ATTEMPTED
+            except (aiohttp.ClientError, asyncio.TimeoutError, ValueError):
+                logger.exception("Bazarr scan skipped: could not read task status")
+                return BazarrScanOutcome.NOT_ATTEMPTED
+            state.uncertain = True
+            try:
+                outcome = await self._send_scan(operation, target, url, params)
+            except asyncio.CancelledError:
+                state.uncertain = True
+                logger.warning(
+                    "Bazarr scan cancelled for %s; further scans paused because "
+                    "Bazarr may still be scanning",
+                    target,
+                )
+                raise
+            state.uncertain = outcome is BazarrScanOutcome.UNCONFIRMED
+            if state.uncertain:
+                logger.warning(
+                    "Further Bazarr scans paused: verify Bazarr is idle, then "
+                    "restart SubGen to resume notifications"
+                )
+            return outcome
+
+    async def _send_scan(
+        self,
+        operation: str,
+        target: str,
         url: str,
         params: Dict[str, Union[int, str]],
     ) -> BazarrScanOutcome:
@@ -193,16 +279,9 @@ class BazarrClient:
                 total=BAZARR_SCAN_TIMEOUT_SECONDS,
                 sock_connect=BAZARR_SCAN_CONNECT_TIMEOUT_SECONDS,
             )
-            if method == "patch":
-                request = session.patch(
-                    url, headers=self.headers, params=params, timeout=timeout
-                )
-            else:
-                request = session.post(
-                    url, headers=self.headers, params=params, timeout=timeout
-                )
-
-            async with request as response:
+            async with session.patch(
+                url, headers=self.headers, params=params, timeout=timeout
+            ) as response:
                 elapsed = time.monotonic() - started_at
                 if response.status in (200, 204):
                     logger.debug(
@@ -237,7 +316,7 @@ class BazarrClient:
                 type(error).__name__,
             )
             return BazarrScanOutcome.UNCONFIRMED
-        except Exception as error:
+        except aiohttp.ClientError as error:
             elapsed = time.monotonic() - started_at
             logger.exception(
                 "Bazarr %s scan outcome unconfirmed for %s after %.1fs "
@@ -252,31 +331,19 @@ class BazarrClient:
             return BazarrScanOutcome.UNCONFIRMED
 
     async def trigger_disk_scan_outcome(self) -> BazarrScanOutcome:
-        """Trigger full series and movie indexing and combine their outcomes."""
-        if not self.is_configured:
-            logger.warning("Bazarr not configured, skipping disk scan")
-            return BazarrScanOutcome.NOT_ATTEMPTED
-
-        outcomes = (
-            await self.trigger_series_scan_outcome(),
-            await self.trigger_movie_scan_outcome(),
+        """Decline asynchronous full-library jobs that cannot be safely serialized."""
+        logger.warning(
+            "Bazarr full scan skipped: only targeted subtitle scans are supported; "
+            "run a manual scan in Bazarr if needed"
         )
-        if BazarrScanOutcome.CONFIRMED in outcomes:
-            return BazarrScanOutcome.CONFIRMED
-        if BazarrScanOutcome.UNCONFIRMED in outcomes:
-            return BazarrScanOutcome.UNCONFIRMED
-        if all(outcome is BazarrScanOutcome.NOT_ATTEMPTED for outcome in outcomes):
-            return BazarrScanOutcome.NOT_ATTEMPTED
-        return BazarrScanOutcome.REJECTED
+        return BazarrScanOutcome.NOT_ATTEMPTED
 
     async def trigger_disk_scan(self) -> bool:
         """
-        Trigger a full disk scan in Bazarr.
-        
-        This will make Bazarr detect newly created subtitle files.
+        Decline a full disk scan; use targeted series or movie scans instead.
         
         Returns:
-            True if successful.
+            False; automatic full-library tasks are not submitted.
         """
         return (
             await self.trigger_disk_scan_outcome()
@@ -426,8 +493,12 @@ async def notify_bazarr_of_new_subtitle(media_path: str) -> bool:
             if movie_id:
                 return await client.trigger_movie_scan(movie_id)
         
-        # Fall back to full scan
-        return await client.trigger_disk_scan()
+        logger.warning(
+            "Bazarr notification skipped: no matching series or movie for %s; "
+            "run a manual scan in Bazarr if needed",
+            media_path,
+        )
+        return False
         
     finally:
         await client.close()
