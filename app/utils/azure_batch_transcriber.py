@@ -452,7 +452,7 @@ class AzureBatchTranscriber:
         if candidate_locales:
             # Single mode: at-start detection, max 4 candidates
             # Ideal for movies/TV shows with consistent language throughout
-            payload["languageIdentification"] = {
+            payload["properties"]["languageIdentification"] = {
                 "candidateLocales": candidate_locales[
                     :4
                 ],  # Enforce max 4 for Single mode

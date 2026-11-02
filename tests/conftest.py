@@ -146,6 +146,7 @@ def mock_settings():
     mock_transcription.limit_to_preferred_audio_languages = False
     mock_transcription.detect_language_length = 30
     mock_transcription.detect_language_offset = 0
+    mock_transcription.language_detection_candidates = "en-US,nl-NL,es-ES,fr-FR"
     
     mock_skip = MagicMock()
     mock_skip.skip_if_subgen_exists = False
@@ -183,6 +184,9 @@ def mock_settings():
     settings.subtitle_language = "en"
     settings.media_folders = ["/media/tv", "/media/movies"]
     settings.concurrent_transcriptions = 10
+    settings.job_poll_interval = 30
+    settings.transcription_timeout = 3600
+    settings.asr_keepalive_interval = 15.0
     settings.transcode_dir = ""  # Empty string means use system temp
     settings.host = "0.0.0.0"
     settings.port = 8090
@@ -338,8 +342,10 @@ def mock_aiohttp_session():
 @pytest.fixture
 def mock_transcription_result():
     """Create a mock transcription result."""
-    from app.utils.azure_batch_transcriber import (TranscriptionResult,
-                                             TranscriptionSegment)
+    from app.utils.azure_batch_transcriber import (
+        TranscriptionResult,
+        TranscriptionSegment,
+    )
     
     return TranscriptionResult(
         job_id='test-job-123',

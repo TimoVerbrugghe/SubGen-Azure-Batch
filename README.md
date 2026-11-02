@@ -105,6 +105,19 @@ SubGen coordinates targeted Bazarr scans to reduce overlap. Busy or unavailable 
 
 If logs report that scans are paused after an uncertain outcome, verify Bazarr is idle (or recover/restart Bazarr if necessary), then restart SubGen to resume scans. Avoid concurrent manual scans or scans from other integrations.
 
+### ConnectionError and Kubernetes
+
+If Bazarr reports a connection error, check these settings:
+
+1. Use a SubGen base URL that is reachable **from Bazarr**, without `/asr`.
+2. Set Bazarr's **Connection/response timeout** to **60 seconds**.
+3. Keep its **Transcription/Translation timeout** at **3600 seconds** or longer.
+4. For read-only Kubernetes containers, mount a writable volume at `/transcode`
+   and set `TMPDIR=/transcode`.
+
+After applying changes, use **System > Providers > Reset** in Bazarr, then retry
+one episode. If it still fails, check **System > Logs** for the error.
+
 ## Plex
 
 Set `PLEX_SERVER` and `PLEX_TOKEN` to enable automatic refresh after SubGen saves a video subtitle. Web UI and agent/API batches do **not** require a webhook.
@@ -184,7 +197,7 @@ The following environment variables are available in Docker. They will default t
 | AZURE_STORAGE_CONTAINER | 'transcription-audio' | **(New)** Container name for temporary audio uploads |
 | **Server Settings** |   |   |
 | DEBUG | False | Provides debug data that can be helpful to troubleshoot issues |
-| UVICORN_TIMEOUT_KEEP_ALIVE | (unset) | **(New)** TCP keepalive timeout in seconds. Set to prevent connection resets during long transcriptions (e.g., 300). Only applied if set. |
+| UVICORN_TIMEOUT_KEEP_ALIVE | (unset) | Idle HTTP connection timeout between requests, in seconds. Does not protect active uploads or transcriptions. Only applied if set. |
 | **Media Settings** |   |   |
 | MEDIA_FOLDERS | '/tv,/movies' | **(New)** Comma-separated list of paths to show in the Web UI file browser |
 | SUBTITLE_LANGUAGE | '' | Default subtitle language code (leave empty for auto-detect) |
@@ -241,6 +254,7 @@ The following environment variables are available in Docker. They will default t
 | **Bazarr Integration** |   |   |
 | BAZARR_URL | '' | **(New)** Bazarr server URL for notifications (e.g., http://bazarr:6767) |
 | BAZARR_API_KEY | '' | **(New)** Bazarr API key for notifications |
+| ASR_KEEPALIVE_INTERVAL | 15 | Interval in seconds to keep long-running Bazarr requests connected. Set to 0 to disable. |
 | **Notifications** |   |   |
 | PUSHOVER_USER_KEY | '' | **(New)** Pushover user/group key. Required with `PUSHOVER_API_TOKEN` to send notifications. |
 | PUSHOVER_API_TOKEN | '' | **(New)** Pushover application API token. Create an application in Pushover to obtain it. |
@@ -377,6 +391,8 @@ Ingress must route `/mcp` (including `/mcp/`) to port 9000 and preserve
 `X-API-Key`, `Mcp-Session-Id`, `MCP-Protocol-Version`, and streaming responses.
 Disable response buffering where your ingress requires it and allow long-lived
 streaming requests. These settings are ingress-controller-specific.
+For Bazarr uploads and ASR responses, also follow the
+[connection troubleshooting guidance](#connectionerror-and-kubernetes).
 Use one replica: batch and MCP session tracking is in memory; multiple replicas
 would require session affinity and do not share batch state.
 The example mounts `/transcode` as an `emptyDir` for temporary audio; no settings
@@ -396,9 +412,9 @@ network or add authentication at the ingress for those routes.
 | `GET /health` | Health check |
 | `GET /api/status` | Azure connectivity and authenticated Plex/Jellyfin connection checks (no tokens returned) |
 | `GET /status` | Returns SubGen-Azure-Batch version |
-| `POST /asr` | Bazarr-compatible ASR endpoint (returns SRT) |
+| `POST /asr` | Bazarr-compatible audio transcription (SRT output by default) |
 | `GET /detect-language` | Language detection endpoint (Bazarr compatibility) |
-| `POST /detect-language` | Language detection with audio upload (uses Azure language identification) |
+| `POST /detect-language` | Detect the language of uploaded audio |
 | `POST /webhook/plex` | Plex generation webhook; optional for post-save refresh |
 | `POST /webhook/jellyfin` | Jellyfin generation webhook; optional for post-save refresh |
 | `POST /webhook/emby` | Emby generation webhook |

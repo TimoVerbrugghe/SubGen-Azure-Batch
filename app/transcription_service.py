@@ -12,6 +12,7 @@ All transcription jobs are tracked in a unified session system for visibility.
 import asyncio
 import logging
 import os
+import shutil
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -19,6 +20,8 @@ from datetime import datetime
 from enum import Enum
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
+
+import aiofiles
 
 from app.config import format_duration, get_settings
 from app.utils.audio_extractor import extract_audio, is_video_file, make_temp_dir
@@ -400,6 +403,7 @@ class TranscriptionService:
         file_name: str = "unknown",
         is_raw_pcm: bool = False,
         on_status_change: Optional[Callable] = None,
+        candidate_locales: list[str] | None = None,
     ) -> Tuple[TranscriptionResult, TranscriptionJob]:
         """
         Transcribe audio data (bytes) - used by Bazarr ASR endpoint.
@@ -418,11 +422,12 @@ class TranscriptionService:
             file_name: Original file name for logging.
             is_raw_pcm: If True, audio_data is raw PCM (16-bit, 16kHz, mono).
             on_status_change: Optional callback for status updates.
+            candidate_locales: Azure language-identification candidates, if requested.
 
         Returns:
             Tuple of (TranscriptionResult, TranscriptionJob).
         """
-        temp_dir = make_temp_dir(prefix="subgen_transcribe_")
+        temp_dir = await asyncio.to_thread(make_temp_dir, prefix="subgen_transcribe_")
 
         # Create session and job for tracking
         session = await cls.create_session(source=source, notify_bazarr=False)
@@ -433,11 +438,15 @@ class TranscriptionService:
         is_priority = source == JobSource.BAZARR
         priority = 0 if is_priority else 1
         if is_priority:
-            logger.debug(f"[{job.id}] Bazarr request — acquiring priority pipeline slot")
+            logger.debug(
+                f"[{job.id}] Bazarr request — acquiring priority pipeline slot"
+            )
 
-        await cls._get_pipeline_semaphore().acquire(priority=priority)
+        pipeline_acquired = False
 
         try:
+            await cls._get_pipeline_semaphore().acquire(priority=priority)
+            pipeline_acquired = True
             # Update status
             await cls.update_job_status(session.id, job.id, JobStatus.EXTRACTING)
 
@@ -446,28 +455,31 @@ class TranscriptionService:
                 # Wrap raw PCM in WAV container
                 import wave
 
-                wav_path = os.path.join(temp_dir, "audio.wav")
-                with wave.open(wav_path, "wb") as wav_file:
-                    wav_file.setnchannels(1)  # mono
-                    wav_file.setsampwidth(2)  # 16-bit
-                    wav_file.setframerate(16000)  # 16kHz
-                    wav_file.writeframes(audio_data)
-                temp_audio = wav_path
+                temp_audio = str(Path(temp_dir) / "audio.wav")
+
+                def write_pcm() -> None:
+                    with wave.open(temp_audio, "wb") as wav_file:
+                        wav_file.setnchannels(1)
+                        wav_file.setsampwidth(2)
+                        wav_file.setframerate(16000)
+                        wav_file.writeframes(audio_data)
+
+                await asyncio.to_thread(write_pcm)
                 logger.debug(
                     f"[{job.id}] Created WAV from raw PCM: {len(audio_data)} bytes"
                 )
             else:
                 # Save as-is (already in a container format)
-                temp_audio = os.path.join(temp_dir, "audio.wav")
-                with open(temp_audio, "wb") as f:
-                    f.write(audio_data)
+                temp_audio = str(Path(temp_dir) / "audio.wav")
+                async with aiofiles.open(temp_audio, "wb") as audio_file:
+                    await audio_file.write(audio_data)
 
             # Convert to OGG/Opus for smaller upload size
-            ogg_path = os.path.join(temp_dir, "audio.ogg")
+            ogg_path = str(Path(temp_dir) / "audio.ogg")
             await cls._convert_to_ogg(temp_audio, ogg_path)
 
             original_size = len(audio_data)
-            compressed_size = os.path.getsize(ogg_path)
+            compressed_size = (await asyncio.to_thread(Path(ogg_path).stat)).st_size
             logger.info(
                 f"[{job.id}] Audio compressed: {original_size:,} → {compressed_size:,} bytes ({100 * compressed_size / original_size:.1f}%)"
             )
@@ -496,6 +508,7 @@ class TranscriptionService:
                         audio_url=audio_url,
                         locale=azure_locale,
                         display_name=f"{source.value}-{Path(file_name).stem if file_name != 'unknown' else job.id}",
+                        candidate_locales=candidate_locales,
                     )
                     job.azure_job_id = azure_job.id
                     logger.info(
@@ -520,31 +533,40 @@ class TranscriptionService:
                     return result, job
 
                 finally:
-                    if job.azure_job_id:
-                        try:
-                            await transcriber.delete_transcription(job.azure_job_id)
-                            logger.info(
-                                f"[Session {session.id}] [{job.id}] Deleted Azure transcription: {job.azure_job_id}"
-                            )
-                        except Exception as e:
-                            logger.warning(f"[{job.id}] Failed to delete Azure job: {e}")
-                    azure_sem.release()
+                    try:
+                        if job.azure_job_id:
+                            try:
+                                await transcriber.delete_transcription(job.azure_job_id)
+                                logger.info(
+                                    f"[Session {session.id}] [{job.id}] Deleted Azure transcription: {job.azure_job_id}"
+                                )
+                            except Exception as e:
+                                logger.warning(
+                                    f"[{job.id}] Failed to delete Azure job: {e}"
+                                )
+                    finally:
+                        azure_sem.release()
 
             finally:
-                # Cleanup blob
-                if job.blob_name:
-                    try:
-                        await transcriber.delete_blob(job.blob_name)
-                        logger.info(
-                            f"[Session {session.id}] [{job.id}] Deleted Azure blob: {job.blob_name}"
-                        )
-                    except Exception as e:
-                        logger.warning(
-                            f"[Session {session.id}] [{job.id}] Failed to delete blob: {e}"
-                        )
+                try:
+                    if job.blob_name:
+                        try:
+                            await transcriber.delete_blob(job.blob_name)
+                            logger.info(
+                                f"[Session {session.id}] [{job.id}] Deleted Azure blob: {job.blob_name}"
+                            )
+                        except Exception as e:
+                            logger.warning(
+                                f"[Session {session.id}] [{job.id}] Failed to delete blob: {e}"
+                            )
+                finally:
+                    await transcriber.close()
 
-                await transcriber.close()
-
+        except asyncio.CancelledError:
+            if job.status not in (JobStatus.COMPLETED, JobStatus.FAILED):
+                await cls.update_job_status(session.id, job.id, JobStatus.CANCELLED)
+            logger.info(f"[{job.id}] ASR request cancelled")
+            raise
         except Exception as e:
             await cls.update_job_status(
                 session.id, job.id, JobStatus.FAILED, error=str(e)
@@ -553,15 +575,14 @@ class TranscriptionService:
 
         finally:
             # Release pipeline slot
-            cls._get_pipeline_semaphore().release()
+            if pipeline_acquired:
+                cls._get_pipeline_semaphore().release()
 
             # Cleanup temp files
             try:
-                import shutil
-
-                shutil.rmtree(temp_dir)
-            except Exception:
-                pass
+                await asyncio.to_thread(shutil.rmtree, temp_dir)
+            except OSError as e:
+                logger.warning(f"[{job.id}] Failed to clean up temp directory: {e}")
 
     @classmethod
     async def transcribe_file(
@@ -831,7 +852,7 @@ class TranscriptionService:
             if azure_job.status.value == "Succeeded":
                 break
             elif azure_job.status.value == "Failed":
-                raise Exception(azure_job.error_message or "Transcription failed")
+                raise RuntimeError(azure_job.error_message or "Transcription failed")
 
             # Log progress periodically
             current_time = time.time()
@@ -845,12 +866,14 @@ class TranscriptionService:
             poll_count += 1
 
         if poll_count >= max_polls:
-            raise Exception("Transcription timed out")
+            raise TimeoutError("Transcription timed out")
 
-        return await transcriber.get_transcription_result(azure_job_id, fallback_locale=azure_job.locale)
+        return await transcriber.get_transcription_result(
+            azure_job_id, fallback_locale=azure_job.locale
+        )
 
     @classmethod
-    async def _convert_to_ogg(cls, input_path: str, output_path: str):
+    async def _convert_to_ogg(cls, input_path: str, output_path: str) -> None:
         """Convert audio to OGG/Opus format for efficient upload."""
 
         cmd = [
@@ -873,7 +896,13 @@ class TranscriptionService:
         process = await asyncio.create_subprocess_exec(
             *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
         )
-        stdout, stderr = await process.communicate()
+        try:
+            stdout, stderr = await process.communicate()
+        except asyncio.CancelledError:
+            if process.returncode is None:
+                process.kill()
+            await process.wait()
+            raise
 
         if process.returncode != 0:
             raise RuntimeError(f"FFmpeg conversion failed: {stderr.decode()}")

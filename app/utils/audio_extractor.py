@@ -349,67 +349,79 @@ async def extract_audio_segment(
     input_path: str,
     offset: float = 0.0,
     duration: float = 30.0,
-    output_format: str = 'wav',
-    sample_rate: int = 16000
+    output_format: str = "wav",
+    sample_rate: int = 16000,
 ) -> str:
     """
     Extract a segment of audio from a media file.
-    
+
     Useful for language detection where we only need a small sample.
-    
+
     Args:
         input_path: Path to the input audio/video file.
         offset: Start time in seconds.
         duration: Length of segment in seconds.
         output_format: Output audio format (wav recommended for Azure).
         sample_rate: Target sample rate in Hz.
-        
+
     Returns:
         Path to the extracted audio segment (temp file).
     """
-    output_path = make_temp_file(suffix=f'.{output_format}')
-    
+    output_path = make_temp_file(suffix=f".{output_format}")
+
     # Determine codec
-    if output_format == 'wav':
-        codec = 'pcm_s16le'
-    elif output_format == 'ogg':
-        codec = 'libopus'
+    if output_format == "wav":
+        codec = "pcm_s16le"
+    elif output_format == "ogg":
+        codec = "libopus"
     else:
-        codec = 'pcm_s16le'  # Default to WAV for compatibility
-    
+        codec = "pcm_s16le"  # Default to WAV for compatibility
+
     cmd = [
-        'ffmpeg',
-        '-y',
-        '-ss', str(offset),      # Start time
-        '-i', input_path,
-        '-t', str(duration),     # Duration
-        '-vn',                   # No video
-        '-acodec', codec,
-        '-ar', str(sample_rate),
-        '-ac', '1',              # Mono
-        output_path
+        "ffmpeg",
+        "-y",
+        "-ss",
+        str(offset),  # Start time
+        "-i",
+        input_path,
+        "-t",
+        str(duration),  # Duration
+        "-vn",  # No video
+        "-acodec",
+        codec,
+        "-ar",
+        str(sample_rate),
+        "-ac",
+        "1",  # Mono
+        output_path,
     ]
-    
+
     logger.debug(f"Extracting audio segment: offset={offset}s, duration={duration}s")
-    
+
+    process: asyncio.subprocess.Process | None = None
     try:
         process = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
+            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
         )
         stdout, stderr = await process.communicate()
-        
+
         if process.returncode != 0:
             error_msg = stderr.decode()
             logger.error(f"FFmpeg segment extraction failed: {error_msg}")
             # Try to cleanup failed output
             cleanup_temp_file(output_path)
             raise RuntimeError(f"Audio segment extraction failed: {error_msg}")
-        
+
         logger.debug(f"Audio segment extracted: {output_path}")
         return output_path
-        
+
+    except asyncio.CancelledError:
+        if process is not None:
+            if process.returncode is None:
+                process.kill()
+            await process.wait()
+        await asyncio.to_thread(cleanup_temp_file, output_path)
+        raise
     except FileNotFoundError:
         cleanup_temp_file(output_path)
         raise RuntimeError("FFmpeg not found. Please install FFmpeg.")

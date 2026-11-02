@@ -9,7 +9,7 @@ Tests cover:
 """
 
 import os
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -364,6 +364,41 @@ class TestSettingsSingleton:
             settings.jellyfin.path_mapping.apply("/media/ep.mkv") == "/jellyfin/ep.mkv"
         )
         assert settings.emby.path_mapping.apply("/media/ep.mkv") == "/emby/ep.mkv"
+
+    @pytest.mark.parametrize("interval", [0, 0.5, 15])
+    def test_should_accept_non_negative_asr_keepalive_interval(
+        self, interval: float, mock_settings: MagicMock
+    ) -> None:
+        """Heartbeat intervals support opt-out and fractional seconds."""
+        from app.config import Settings
+
+        settings = Settings(azure=mock_settings.azure, asr_keepalive_interval=interval)
+        assert settings.asr_keepalive_interval == interval
+
+    @pytest.mark.parametrize("interval", [-1, float("nan"), float("inf")])
+    def test_should_reject_invalid_asr_keepalive_interval(
+        self, interval: float, mock_settings: MagicMock
+    ) -> None:
+        """Invalid configuration fails explicitly before handling requests."""
+        from app.config import Settings
+
+        with pytest.raises(
+            ValueError, match="ASR_KEEPALIVE_INTERVAL must be finite and non-negative"
+        ):
+            Settings(azure=mock_settings.azure, asr_keepalive_interval=interval)
+
+    def test_should_load_asr_keepalive_interval_without_real_environment(
+        self, mock_settings: MagicMock
+    ) -> None:
+        """Environment parsing honors the new interval without changing process env."""
+        from app.config import Settings
+
+        def getenv(name: str, default: str = "") -> str:
+            return "7.5" if name == "ASR_KEEPALIVE_INTERVAL" else default
+
+        with patch("app.config.os.getenv", side_effect=getenv):
+            settings = Settings.from_env()
+        assert settings.asr_keepalive_interval == 7.5
 
     @pytest.mark.parametrize("value", [None, "", "   "])
     def test_should_accept_any_mcp_host_when_allowlist_is_unset_or_blank(

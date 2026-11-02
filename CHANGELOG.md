@@ -13,6 +13,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Fixed
 
 - Bazarr subtitle scans are serialized across batches and webhooks and wait for running scheduled jobs. Uncertain scans pause further notifications until SubGen restarts; unmatched paths no longer launch asynchronous full-library update jobs.
+- Bazarr SRT and language-detection responses now send configurable whitespace heartbeats during queueing and Azure processing. ASR processing remains timeout-bounded, disconnected requests clean up known resources, and MCP authentication no longer masks failed streams. Buffered responses remain available with `ASR_KEEPALIVE_INTERVAL=0`.
+- Language detection now uses shared job tracking and the Bazarr-priority queue, honors configured forced languages, reports failures explicitly, and sends Azure v3.2 `languageIdentification` inside transcription properties.
+- Bazarr/Kubernetes troubleshooting now distinguishes upload socket timeouts, response-idle timeouts, and connectivity failures; Uvicorn keep-alive documentation no longer claims to protect active requests.
 - Bazarr scan timeouts now report an unconfirmed remote outcome with exception diagnostics instead of claiming the scan failed; batch completion notifications are sent before waiting for scans.
 - Media-server refresh now runs after every saved video subtitle, including every Jellyfin episode in a shared season directory. Webhook jobs use the unified transcription service and release duplicate tracking when skipped.
 
