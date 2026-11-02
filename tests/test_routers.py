@@ -364,15 +364,10 @@ class TestBatchNotifications:
             await batch.process_batch_session(session.id)
 
         if media_type == "unmatched":
-            bazarr.trigger_disk_scan_outcome.assert_awaited_once_with()
+            bazarr.trigger_disk_scan_outcome.assert_not_awaited()
             bazarr.trigger_series_scan_outcome.assert_not_awaited()
             bazarr.trigger_movie_scan_outcome.assert_not_awaited()
-            if outcome_values[0] is BazarrScanOutcome.UNCONFIRMED:
-                assert "Bazarr: Full scan outcome unconfirmed" in caplog.text
-            elif scan_success:
-                assert "Bazarr: Full scan not confirmed" not in caplog.text
-            else:
-                assert "Bazarr: Full scan not confirmed" in caplog.text
+            assert "No matching Bazarr items found; notification skipped" in caplog.text
         else:
             scan = (
                 bazarr.trigger_series_scan_outcome

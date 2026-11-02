@@ -12,6 +12,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- Bazarr subtitle scans are serialized across batches and webhooks and wait for running scheduled jobs. Uncertain scans pause further notifications until SubGen restarts; unmatched paths no longer launch asynchronous full-library update jobs.
 - Bazarr scan timeouts now report an unconfirmed remote outcome with exception diagnostics instead of claiming the scan failed; batch completion notifications are sent before waiting for scans.
 - Media-server refresh now runs after every saved video subtitle, including every Jellyfin episode in a shared season directory. Webhook jobs use the unified transcription service and release duplicate tracking when skipped.
 
