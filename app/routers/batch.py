@@ -27,6 +27,7 @@ from app.transcription_service import JobStatus as ServiceJobStatus
 from app.transcription_service import (TranscriptionJob, TranscriptionService,
                                        TranscriptionSession)
 from app.utils.bazarr_client import BazarrClient, BazarrScanOutcome
+from app.utils.language_code import LanguageCode
 from app.utils.notification_service import notify_batch_completion
 from app.utils.skip_checker import should_skip_file
 from app.utils.subtitle_utils import get_srt_path
@@ -130,6 +131,8 @@ class JobStatusResponse(BaseModel):
     """Status of a single job."""
     id: str
     file_path: str
+    language: str
+    language_name: Optional[str] = None
     status: str
     status_text: str = ""  # Human-readable status description
     progress: int
@@ -511,6 +514,8 @@ async def submit_batch(request: BatchSubmitRequest, background_tasks: Background
         jobs_info.append({
             "id": job.id,
             "file_path": file_path,
+            "language": job.language,
+            "language_name": LanguageCode.from_string(job.language).name_en,
             "status": JobStatus.from_service_status(job.status).value,
         })
     
@@ -558,6 +563,8 @@ async def get_session_status(session_id: str):
         JobStatusResponse(
             id=job.id,
             file_path=job.file_path,
+            language=job.language,
+            language_name=LanguageCode.from_string(job.language).name_en,
             status=JobStatus.from_service_status(job.status).value,
             status_text=get_status_text(JobStatus.from_service_status(job.status), 0),
             progress=0,
@@ -601,6 +608,8 @@ async def get_job_status(session_id: str, job_id: str):
     return JobStatusResponse(
         id=job.id,
         file_path=job.file_path,
+        language=job.language,
+        language_name=LanguageCode.from_string(job.language).name_en,
         status=local_status.value,
         status_text=get_status_text(local_status, 0),
         progress=0,
@@ -673,6 +682,8 @@ async def list_sessions():
             jobs.append({
                 "id": job_id,
                 "file_path": job.file_path,
+                "language": job.language,
+                "language_name": LanguageCode.from_string(job.language).name_en,
                 "status": local_status.value,
                 "status_text": get_status_text(local_status, 0),
                 "error": job.error,

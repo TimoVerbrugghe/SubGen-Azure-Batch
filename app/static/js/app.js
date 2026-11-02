@@ -870,6 +870,13 @@ class SubGenApp {
             
             const sourceLabel = {bazarr: 'Bazarr', webhook: 'Webhook', api: 'API', ui: 'Batch'}[session.source] || 'Batch';
             const sourceClass = session.source === 'bazarr' ? 'source-bazarr' : 'source-ui';
+            const languages = [...new Set((session.jobs || []).map(job => {
+                const code = job.language || '';
+                return job.language_name ? `${job.language_name} (${code})` : code || 'Default';
+            }))].join(', ');
+            const languageBadge = languages
+                ? `<span class="session-language" title="Transcription language">${this.escapeHtml(languages)}</span>`
+                : '';
             
             // Show cancel button only for in-progress sessions
             const cancelButton = inProgress 
@@ -879,7 +886,7 @@ class SubGenApp {
             html += `
                 <div class="session-card ${statusClass}" data-session-id="${sessionId}">
                     <div class="session-header">
-                        <span class="session-id"><span class="session-source ${sourceClass}">${sourceLabel}</span> Session ${sessionId}</span>
+                        <span class="session-id"><span class="session-source ${sourceClass}">${sourceLabel}</span> Session ${sessionId} ${languageBadge}</span>
                         <span class="session-stats">
                             ✅ ${session.completed} / ${session.total_jobs}
                             ${session.failed > 0 ? `❌ ${session.failed}` : ''}
