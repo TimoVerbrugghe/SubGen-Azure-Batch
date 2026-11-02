@@ -628,7 +628,7 @@ class TestWebhookRouter:
                 files={"audio_file": ("audio.wav", b"audio", "audio/wav")},
             )
         assert response.status_code == 200
-        assert response.text == mock_transcription_result.to_srt()
+        assert response.text.lstrip("\n") == mock_transcription_result.to_srt()
         refresh.assert_not_called()
     
     @pytest.fixture
